@@ -9,6 +9,11 @@ on:
       - 'force_ci/all/**'    # For development, forcing all workflows to run.
       - 'force_ci/build/**'  # For debugging and/or only forcing this workflow.
 
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   # Build the RocksDB C library and cache the result.
   librocksdb:
@@ -22,7 +27,7 @@ jobs:
         rocksdb_ver: ['v10.10.1', 'v9.10.0']
 
     steps:
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         id: cache-librocksdb
         with:
           key: ${{ matrix.os }}-librocksdb-${{ matrix.rocksdb_ver }}
@@ -58,10 +63,10 @@ jobs:
         rocksdb_ver: ['v10.10.1', 'v9.10.0']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: 'Checkout source repository'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         name: 'Set up Python ${{ matrix.py_ver }}'
         with:
           python-version: ${{ matrix.py_ver }}
@@ -75,7 +80,7 @@ jobs:
           libgflags-dev libzstd-dev
 
       # Recover the pre-built C library.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         id: cache-librocksdb
         with:
           key: ${{ matrix.os }}-librocksdb-${{ matrix.rocksdb_ver }}

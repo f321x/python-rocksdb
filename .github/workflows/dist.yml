@@ -11,6 +11,11 @@ on:
       - 'force_ci/all/**'     # For development, forcing all workflows to run.
       - 'force_ci/dist/**'    # For debugging and/or only forcing this workflow.
 
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build_wheels:
     name: 'Build wheels'
@@ -22,17 +27,17 @@ jobs:
         os: [ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: 'Checkout source repository'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         name: 'Set up Python'
         with:
           python-version: '3.12'
 
       - name: 'Install cibuildwheel'
         run: |
-          python3 -m pip install cibuildwheel>=3.4.1
+          python3 -m pip install 'cibuildwheel>=3.4.1,<4'
 
       - name: 'Build wheels'
         run: |
@@ -64,7 +69,7 @@ jobs:
           # library.
           CIBW_TEST_COMMAND: 'pytest --pyargs rocksdb'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         name: 'Upload build artifacts'
         with:
           name: 'wheels'
@@ -74,10 +79,10 @@ jobs:
     name: 'Build source distribution'
     runs-on: 'ubuntu-latest'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: 'Checkout source repository'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         name: 'Set up Python'
         with:
           python-version: '3.12'
@@ -87,7 +92,7 @@ jobs:
           python3 -m pip install build &&
           python3 -m build --sdist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         name: 'Upload build artifacts'
         with:
           name: 'sdist'
@@ -99,14 +104,20 @@ jobs:
 #    needs: ['build_wheels', 'build_sdist']
 #    runs-on: 'ubuntu-latest'
 #    if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/v')
+#    # Trusted Publishing (OIDC) — preferred over a long-lived API token. Set up a
+#    # matching publisher at https://pypi.org/manage/account/publishing/ and a
+#    # GitHub environment named below; no PYPI_API_TOKEN secret is needed.
+#    environment: 'pypi'
+#    permissions:
+#      id-token: write
 #    steps:
-#      - uses: actions/download-artifact@v4
+#      - uses: actions/download-artifact@v8
 #        name: 'Download artifacts'
 #        with:
 #          path: 'dist'
+#          merge-multiple: true   # flatten 'wheels' + 'sdist' artifacts into dist/
 #
 #      - uses: pypa/gh-action-pypi-publish@release/v1
 #        name: 'Publish built packages'
-#        with:
-#          user: '__token__'
-#          password: '${{ secrets.PYPI_API_TOKEN }}'
+#        # No user/password: the OIDC token is exchanged automatically and PEP 740
+#        # attestations are generated for each distribution file.

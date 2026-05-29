@@ -21,9 +21,6 @@ extra_compile_args = [
 if platform.system() == 'Darwin':
     extra_compile_args += ['-mmacosx-version-min=10.13', '-stdlib=libc++']
 
-if sys.version_info < (3 , 0):
-    raise Exception('python-rocksdb requires Python 3.x')
-
 try:
     ext_args = pkgconfig.parse('rocksdb')
 except pkgconfig.PackageNotFoundError:
@@ -42,7 +39,13 @@ except pkgconfig.PackageNotFoundError:
     ext_args = {
         'include_dirs': include_path.split(os.pathsep) if include_path else [],
         'library_dirs': library_path.split(os.pathsep) if library_path else [],
-        'libraries': ['rocksdb', 'snappy', 'bz2', 'z', 'lz4', 'zstd'],
+        # Only link librocksdb. A shared librocksdb.so already declares its own
+        # compression-library dependencies (snappy/bz2/z/lz4/zstd), so listing
+        # them here just risks a spurious `cannot find -l<lib>` when a `-dev`
+        # package is absent or RocksDB was built without that codec. If you link
+        # a *static* librocksdb.a, re-add the codecs you compiled it with (or,
+        # preferably, install rocksdb.pc so the pkgconfig path above is used).
+        'libraries': ['rocksdb'],
     }
 
 rocksdb_extension = Extension(

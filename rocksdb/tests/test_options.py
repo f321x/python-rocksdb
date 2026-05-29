@@ -28,7 +28,6 @@ class TestOptions(unittest.TestCase):
         #  with self.assertRaises(TypeError):
             #  opts.merge_operator = "not an operator"
 
-    # FIXME: travis test should include the latest version of rocksdb
     def test_compaction_pri(self):
         opts = rocksdb.Options()
         # default compaction_pri

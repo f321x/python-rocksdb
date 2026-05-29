@@ -8,6 +8,11 @@ on:
       - 'force_ci/all/**'     # For development, forcing all workflows to run.
       - 'force_ci/debian/**'  # For debugging and/or only forcing this workflow.
 
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   debian-build:
     name: ${{ matrix.dist }}
@@ -17,10 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         # python-rocksdb 2.x requires RocksDB >= 9 and Cython >= 3, so only
-        # Debian trixie (13) and newer ship compatible system packages.
-        dist: [trixie, sid]
+        # Debian trixie (13) and newer ship compatible system packages. We test
+        # trixie (stable) only; sid (unstable) is a rolling target that will
+        # eventually ship RocksDB 11 / Cython 4 and break here unpredictably.
+        dist: [trixie]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build-dependencies
         # TODO(dato): find out why setup.py links to compression libraries
