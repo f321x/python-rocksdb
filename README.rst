@@ -40,3 +40,8 @@ unfinished pull requests.
 .. _twmht: https://github.com/twmht
 .. _pyrocksdb: https://github.com/stephan-hof/pyrocksdb
 .. _stephan-hof: https://github.com/stephan-hof
+
+
+Disclaimer
+----------
+This python-rocksdb fork was developed mostly using LLM coding agents.
