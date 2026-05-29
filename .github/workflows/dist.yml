@@ -2,7 +2,9 @@
 name: 'Build distribution'
 
 on:
-  # Only run when pushing to main/merging PRs.
+  # Run on every PR (so wheel/sdist build regressions are caught pre-merge) and
+  # on pushes to main.
+  pull_request:
   push:
     branches:
       - main
