@@ -16,9 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dist: [bullseye, bookworm]
+        # python-rocksdb 2.x requires RocksDB >= 9 and Cython >= 3, so only
+        # Debian trixie (13) and newer ship compatible system packages.
+        dist: [trixie, sid]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install build-dependencies
         # TODO(dato): find out why setup.py links to compression libraries

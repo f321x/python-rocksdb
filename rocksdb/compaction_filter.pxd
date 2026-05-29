@@ -36,9 +36,9 @@ cdef extern from "rocksdb/compaction_filter.h" namespace "rocksdb":
         cpp_bool Filter(int, const Slice&,
                         const Slice&,
                         string*,
-                        cpp_bool*) nogil except+
+                        cpp_bool*) except+ nogil
         cpp_bool FilterMergeOperand(int, const Slice&,
-                                    const Slice&) nogil except+
+                                    const Slice&) except+ nogil
         Decision FilterV2(int level, const Slice&, ValueType,
                           const Slice&, string*,
                           string*)

@@ -211,18 +211,6 @@ Options objects
         | *Type:* ``int``
         | *Default:* ``24``
 
-    .. py:attribute:: max_mem_compaction_level
-
-        Maximum level to which a new compacted memtable is pushed if it
-        does not create overlap.  We try to push to level 2 to avoid the
-        relatively expensive level 0=>1 compactions and to avoid some
-        expensive manifest file operations.  We do not push all the way to
-        the largest level since that can generate a lot of wasted disk
-        space if the same key space is being repeatedly overwritten.
-
-        | *Type:* ``int``
-        | *Default:* ``2``
-
     .. py:attribute:: target_file_size_base
 
         | Target file size for compaction.
@@ -612,14 +600,6 @@ Options objects
         | *Type:* ``int``
         | *Default:* ``21600000000``
 
-    .. py:attribute:: max_background_compactions
-
-        Maximum number of concurrent background jobs, submitted to
-        the default LOW priority thread pool
-
-        | *Type:* ``int``
-        | *Default:* ``1``
-
     .. py:attribute:: stats_history_buffer_size
 
         if not zero, periodically take stats snapshots and store in memory, the
@@ -868,7 +848,7 @@ BloomFilterPolicy
 
     .. py:method:: __init__(bits_per_key)
 
-    :param int bits_per_key:
+    :param float bits_per_key:
         Specifies the approximately number of bits per key.
         A good value for bits_per_key is 10, which yields a filter with
         ~ 1% false positive rate.
@@ -909,19 +889,13 @@ https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats
 
     Wraps BlockBasedTableFactory of RocksDB.
 
-    .. py:method:: __init__(index_type='binary_search', hash_index_allow_collision=True, checksum='crc32', block_cache, block_cache_compressed, filter_policy=None, no_block_cache=False, block_size=None, block_size_deviation=None, block_restart_interval=None, whole_key_filtering=None, enable_index_compression=None, cache_index_and_filter_blocks=None, format_version=None)
+    .. py:method:: __init__(index_type='binary_search', checksum='crc32', block_cache=None, filter_policy=None, no_block_cache=False, block_size=None, block_size_deviation=None, block_restart_interval=None, whole_key_filtering=None, cache_index_and_filter_blocks=None, format_version=None)
 
     :param string index_type:
         * ``binary_search`` a space efficient index block that is optimized
           for binary-search-based index.
         * ``hash_search`` the hash index. If enabled, will do hash lookup
           when `Options.prefix_extractor` is provided.
-
-    :param bool hash_index_allow_collision:
-        Influence the behavior when ``hash_search`` is used.
-        If ``False``, stores a precise prefix to block range mapping.
-        If ``True``, does not store prefix and allows prefix hash collision
-        (less memory consumption)
 
     :param string checksum:
         Use the specified checksum type. Newly created table files will be
@@ -937,16 +911,11 @@ https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats
         If not ``None`` use the specified cache for blocks. In that case it must
         be an instance of :py:class:`rocksdb.LRUCache`
 
-    :param block_cache_compressed:
-        If ``None``, rocksdb will not use a compressed block cache.
-        If not ``None`` use the specified cache for compressed blocks. In that
-        case it must be an instance of :py:class:`rocksdb.LRUCache`
-
     :param filter_policy:
         If not ``None`` use the specified filter policy to reduce disk reads.
-        A python filter policy must implement the
-        :py:class:`rocksdb.interfaces.FilterPolicy` interface.
-        Recommended is a instance of :py:class:`rocksdb.BloomFilterPolicy`
+        Must be an instance of :py:class:`rocksdb.BloomFilterPolicy`. Custom
+        Python filter policies are no longer supported (RocksDB removed the
+        legacy filter API).
 
     :param bool no_block_cache:
         Disable block cache. If this is set to true,

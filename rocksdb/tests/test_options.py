@@ -4,16 +4,6 @@ import unittest
 import rocksdb
 
 
-class TestFilterPolicy(rocksdb.interfaces.FilterPolicy):
-    def create_filter(self, keys):
-        return b'nix'
-
-    def key_may_match(self, key, fil):
-        return True
-
-    def name(self):
-        return b'testfilter'
-
 class TestMergeOperator(rocksdb.interfaces.MergeOperator):
     def full_merge(self, *args, **kwargs):
         return (False, None)
@@ -146,8 +136,24 @@ class TestOptions(unittest.TestCase):
     def test_block_options(self):
         rocksdb.BlockBasedTableFactory(
             block_size=4096,
-            filter_policy=TestFilterPolicy(),
+            filter_policy=rocksdb.BloomFilterPolicy(10),
             block_cache=rocksdb.LRUCache(100))
+
+    def test_bloom_filter_policy_accepts_float_bits(self):
+        # NewBloomFilterPolicy now takes a double bits_per_key.
+        rocksdb.BlockBasedTableFactory(
+            filter_policy=rocksdb.BloomFilterPolicy(9.9))
+
+    def test_custom_filter_policy_rejected(self):
+        # Breaking change (2.0): RocksDB removed the legacy FilterPolicy v1
+        # API (CreateFilter/KeyMayMatch), so custom Python filter policies can
+        # no longer be wired up and must be rejected with a clear error.
+        class CustomFilter:
+            def name(self):
+                return b'custom'
+
+        with self.assertRaises(TypeError):
+            rocksdb.BlockBasedTableFactory(filter_policy=CustomFilter())
 
     def test_unicode_path(self):
         name = b'/tmp/M\xc3\xbcnchen'.decode('utf8')
@@ -213,8 +219,6 @@ class TestOptions(unittest.TestCase):
                 ('max_file_opening_threads', NOTNONE, 10),
                 ('max_total_wal_size', NOTNONE, 10),
                 ('max_background_jobs', NOTNONE, 10),
-                ('base_background_compactions', NOTNONE, 10),
-                ('max_background_compactions', NOTNONE, 10),
                 ('max_subcompactions', NOTNONE, 10),
                 ('max_background_flushes', NOTNONE, 10),
                 ('max_log_file_size', NOTNONE, 10),
@@ -238,8 +242,7 @@ class TestOptions(unittest.TestCase):
                 ('stats_history_buffer_size', 1024*1024, 1024),
                 ('advise_random_on_open', True, False),
                 ('db_write_buffer_size', 0, 100),
-                ('new_table_reader_for_compaction_inputs', False, True),
-                ('compaction_readahead_size', 0, 10),
+                ('compaction_readahead_size', 2 * 1024 * 1024, 10),
                 ('random_access_max_buffer_size', 1024*1024, 100),
                 ('writable_file_max_buffer_size', 1024*1024, 100),
                 ('use_adaptive_mutex', False, True),
@@ -258,17 +261,16 @@ class TestOptions(unittest.TestCase):
                 ('skip_stats_update_on_db_open', False, True),
                 ('skip_checking_sst_file_sizes_on_db_open', False, True),
                 ('allow_2pc', False, True),
-                ('fail_if_options_file_error', False, True),
+                ('fail_if_options_file_error', True, False),
                 ('dump_malloc_stats', False, True),
                 ('avoid_flush_during_recovery', False, True),
                 ('avoid_flush_during_shutdown', False, True),
                 ('allow_ingest_behind', False, True),
-                ('preserve_deletes', False, True),
                 ('two_write_queues', False, True),
                 ('manual_wal_flush', False, True),
                 ('atomic_flush', False, True),
                 ('avoid_unnecessary_blocking_io', False, True),
-                ('write_dbid_to_manifest', False, True),
+                ('write_dbid_to_manifest', True, False),
                 ('log_readahead_size', 0, 10),
                 ('best_efforts_recovery', False, True),
         ):

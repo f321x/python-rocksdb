@@ -46,13 +46,13 @@ cdef extern from "rocksdb/utilities/transaction_db.h" namespace "rocksdb":
     cdef cppclass TransactionDB(StackableDB):
         Status Write(const options.WriteOptions&,
                      const TransactionDBWriteOptimizations&,
-                     WriteBatch*) nogil except+
+                     WriteBatch*) except+ nogil
 
     cdef Status TransactionDB_Open "rocksdb::TransactionDB::Open"(
         const options.Options&,
         const TransactionDBOptions&,
         const string&,
-        TransactionDB**) nogil except+
+        TransactionDB**) except+ nogil
 
     cdef Status TransactionDB_Open_ColumnFamilies "rocksdb::TransactionDB::Open"(
         const options.DBOptions&,
@@ -60,4 +60,4 @@ cdef extern from "rocksdb/utilities/transaction_db.h" namespace "rocksdb":
         const string&,
         const vector[ColumnFamilyDescriptor]&,
         vector[ColumnFamilyHandle*]*,
-        TransactionDB**) nogil except+
+        TransactionDB**) except+ nogil

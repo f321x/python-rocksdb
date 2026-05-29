@@ -437,6 +437,61 @@ class TestComparator(TestHelper):
 
         self.assertEqual(b'300', self.db.get(b'300'))
 
+
+class RaisingComparator(rocksdb.interfaces.Comparator):
+    def name(self):
+        return b'raising'
+
+    def compare(self, a, b):
+        raise ValueError('boom in compare')
+
+
+class TestRaisingCallback(TestHelper):
+    # Regression guard for the Cython 3 `noexcept` migration: a Python
+    # exception raised inside a C/C++ callback must surface as a Python-level
+    # exception (with its message intact) instead of unwinding into C++ and
+    # aborting the process.
+    def test_raising_comparator_surfaces_python_exception(self):
+        opts = rocksdb.Options(create_if_missing=True)
+        opts.comparator = RaisingComparator()
+        self.db = rocksdb.DB(os.path.join(self.db_loc, 'test'), opts)
+        with self.assertRaises(Exception) as ctx:
+            # Inserting keys forces key comparisons, which raise in Python.
+            # If the process survives to raise here, noexcept worked.
+            for x in range(100):
+                self.db.put(int_to_bytes(x), b'v')
+        self.assertIn('boom in compare', str(ctx.exception))
+
+
+class TestBackup(TestHelper):
+    # Validates the BackupEngine bindings against modern RocksDB
+    # (rocksdb/utilities/backup_engine.h, BackupEngineOptions, IOStatus).
+    def setUp(self):
+        TestHelper.setUp(self)
+        opts = rocksdb.Options(create_if_missing=True)
+        self.db = rocksdb.DB(os.path.join(self.db_loc, 'test'), opts)
+
+    def test_backup_and_restore(self):
+        self.db.put(b'key', b'value')
+
+        backup_dir = os.path.join(self.db_loc, 'backup')
+        engine = rocksdb.BackupEngine(backup_dir)
+        engine.create_backup(self.db, flush_before_backup=True)
+
+        info = engine.get_backup_info()
+        self.assertEqual(1, len(info))
+        self.assertEqual(1, info[0]['backup_id'])
+
+        # Close the original DB, then restore the backup into a fresh location.
+        del self.db
+        gc.collect()
+        restore_dir = os.path.join(self.db_loc, 'restored')
+        engine.restore_latest_backup(restore_dir, restore_dir)
+
+        self.db = rocksdb.DB(restore_dir, rocksdb.Options(create_if_missing=False))
+        self.assertEqual(b'value', self.db.get(b'key'))
+
+
 class StaticPrefix(rocksdb.interfaces.SliceTransform):
     def name(self):
         return b'static'

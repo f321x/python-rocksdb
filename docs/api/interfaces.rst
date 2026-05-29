@@ -168,48 +168,6 @@ MergeOperator
 
         :rtype: ``bytes``
 
-FilterPolicy
-============
-
-.. py:class:: rocksdb.interfaces.FilterPolicy
-
-    .. py:method:: create_filter(keys)
-
-        Create a bytestring which can act as a filter for keys.
-
-        :param keys: list of keys (potentially with duplicates)
-                     that are ordered according to the user supplied
-                     comparator. 
-        :type keys: list of bytes
-
-        :returns: A filter that summarizes keys
-        :rtype: ``bytes``
-
-    .. py:method:: key_may_match(key, filter)
-
-        Check if the key is maybe in the filter. 
-
-        :param bytes key: Key for a single entry inside the database
-        :param bytes filter: Contains the data returned by a preceding call
-                              to create_filter on this class
-        :returns: This method must return ``True`` if the key was in the list
-                  of keys passed to create_filter().
-                  This method may return ``True`` or ``False`` if the key was
-                  not on the list, but it should aim to return ``False`` with
-                  a high probability.
-        :rtype: ``bool``
-
-                     
-    .. py:method:: name()
-
-        Return the name of this policy.  Note that if the filter encoding
-        changes in an incompatible way, the name returned by this method
-        must be changed.  Otherwise, old incompatible filters may be
-        passed to methods of this type.
-
-        :rtype: ``bytes``
-
-
 SliceTransform
 ==============
 
