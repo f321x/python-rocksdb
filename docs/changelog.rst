@@ -10,8 +10,9 @@ RocksDB (tested on 9.10 and 10.10), CPython 3.11–3.14, and Cython 3.
 Requirements
 ~~~~~~~~~~~~
 
-* Requires **RocksDB >= 9** (built with a C++17 toolchain; the extension is now
-  compiled with ``-std=c++17``).
+* Requires **RocksDB >= 9**. The extension is compiled with ``-std=c++20``
+  because the RocksDB 10.x headers use C++20 features, so a C++20-capable
+  compiler is required.
 * Requires **CPython 3.11–3.14**; Python 3.10 and earlier are no longer
   supported.
 * Building from source requires **Cython >= 3.2.5** and **setuptools >= 80**
@@ -35,7 +36,12 @@ These follow the removal of the corresponding APIs from upstream RocksDB:
   underlying RocksDB fields were deleted: ``base_background_compactions``,
   ``max_background_compactions``, ``new_table_reader_for_compaction_inputs``,
   ``preserve_deletes``, ``access_hint_on_compaction_start`` (and the
-  ``AccessHint`` enum), and ``max_mem_compaction_level``.
+  ``AccessHint`` enum), ``max_mem_compaction_level``,
+  ``random_access_max_buffer_size``, and ``fail_if_options_file_error`` (the
+  last two were removed in RocksDB 10.x).
+* The ``zstdnotfinal_compression`` :py:class:`rocksdb.CompressionType` was
+  removed (RocksDB 10.x deleted the ``kZSTDNotFinalCompression`` enumerator);
+  use ``zstd_compression`` instead.
 
 Internal
 ~~~~~~~~

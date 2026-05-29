@@ -63,6 +63,15 @@ cleanup() {
 }
 trap cleanup EXIT
 git -C "$PROJECT_ROOT" archive --format=tar "$GIT_REF" | tar -x -C "$SRCDIR"
+# `mktemp -d` creates $SRCDIR mode 0700 owned by the invoking user. The builder
+# image runs as a non-root user (uid 1000) that does not own it, so without this
+# it cannot even traverse the read-only bind mount (`cp: cannot stat '/src/.':
+# Permission denied`) -- under both rootful Docker (host uid != 1000) and
+# rootless Podman (the in-container uid maps to a non-owning sub-uid). Make the
+# tree world-readable/traversable; this does NOT affect reproducibility because
+# make_sdist.sh normalizes every member's mode via tar `--mode=` when it
+# re-archives, so the source permission bits never reach the published tarball.
+chmod -R a+rX "$SRCDIR"
 
 # 2. Build the pinned builder image (build logic + toolchain baked in from HERE,
 #    decoupled from the packaged source).
