@@ -180,7 +180,7 @@ This version works with RocksDB v3.12.
 * Publish to pypi.
 
 Backward Incompatible Changes:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * Changed API of :py:meth:`rocksdb.DB.compact_range`.
 
@@ -194,7 +194,7 @@ Version 0.3
 This version works with RocksDB version v3.11.
 
 Backward Incompatible Changes:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Prefix Seeks:**
 
@@ -242,7 +242,7 @@ In newer versions of rocksdb a bunch of options were moved or removed.
 
 
 New:
-^^^^
+~~~~
 * Make CompactRange available: :py:meth:`rocksdb.DB.compact_range`
 * Add init options to :py:class:`rocksdb.BlockBasedTableFactory`
 * Add more option to :py:class:`rocksdb.PlainTableFactory`

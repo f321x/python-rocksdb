@@ -1,0 +1,32 @@
+# vim:ts=2:sw=2:et:ai:sts=2
+name: 'Docs'
+
+on:
+  pull_request:
+  push:
+    branches:
+      - 'main'
+      - 'force_ci/all/**'    # For development, forcing all workflows to run.
+      - 'force_ci/docs/**'   # For debugging and/or only forcing this workflow.
+
+jobs:
+  docs:
+    name: 'Build documentation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        name: 'Checkout source repository'
+
+      - uses: actions/setup-python@v5
+        name: 'Set up Python'
+        with:
+          python-version: '3.12'
+
+      # The docs are hand-written reStructuredText (no Sphinx autodoc), so the
+      # compiled extension and a system RocksDB are NOT needed to build them.
+      # Install just Sphinx + the theme rather than `.[doc]`, which would pull
+      # in the package and trigger a Cython/RocksDB build for no benefit here.
+      - name: 'Build HTML docs (warnings treated as errors)'
+        run: |
+          python3 -m pip install sphinx sphinx_rtd_theme &&
+          sphinx-build -W -b html docs docs/_build/html
