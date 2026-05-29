@@ -11,3 +11,5 @@ rocksdb/_rocksdb.cpp
 *.swp
 pytestdebug.log
 
+dist/
+dist.run*/
