@@ -43,7 +43,7 @@ if [ -z "$RAW_TARBALL" ]; then
     echo "ERROR: no sdist produced in $RAW" >&2
     exit 1
 fi
-DISTNAME="${RAW_TARBALL%.tar.gz}"   # e.g. rocksdb-2.0.0
+DISTNAME="${RAW_TARBALL%.tar.gz}"   # e.g. rocksdb_ng-2.0.0 (PEP 625 underscore)
 
 tar -xzf "$RAW/$RAW_TARBALL" -C "$EXTRACT"
 

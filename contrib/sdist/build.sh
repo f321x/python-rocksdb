@@ -24,7 +24,9 @@
 #   SDIST_NOCACHE      if non-empty, rebuild the builder image from scratch
 #                      (`--no-cache --pull`).
 #
-# Output: ./dist/rocksdb-<version>.tar.gz (owned by the invoking user).
+# Output: ./dist/rocksdb_ng-<version>.tar.gz (owned by the invoking user). The
+#         PyPI project is `rocksdb-ng`; PEP 625 renders that as `rocksdb_ng` in
+#         the sdist filename. The import package is still `rocksdb`.
 set -euo pipefail
 
 ENGINE="${CONTAINER_ENGINE:-docker}"

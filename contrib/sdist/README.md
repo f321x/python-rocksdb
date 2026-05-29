@@ -1,9 +1,13 @@
 # Reproducible source distribution (sdist)
 
-This is the **only** supported way to build and publish the `rocksdb` package to
-PyPI. It produces a *reproducible* source tarball: building the same git commit
-twice — on any machine, with Docker or rootless Podman — yields a byte-for-byte
-identical `dist/rocksdb-<version>.tar.gz`.
+This is the **only** supported way to build and publish the package to PyPI,
+where it is published under the distribution name **`rocksdb-ng`** (the plain
+`rocksdb` name is taken by the upstream project this is forked from; the *import*
+name is unchanged — users still `import rocksdb`). It produces a *reproducible*
+source tarball: building the same git commit twice — on any machine, with Docker
+or rootless Podman — yields a byte-for-byte identical
+`dist/rocksdb_ng-<version>.tar.gz`. (Per PEP 625 the `-ng` in the project name
+becomes `_ng` in the filename.)
 
 Why this matters here: our sdist embeds the Cython-generated
 `rocksdb/_rocksdb.cpp`, so the tarball's bytes depend on the exact Cython
@@ -68,7 +72,7 @@ job. Build the reproducible sdist for the release commit and upload it:
 ```sh
 ./contrib/sdist/build.sh v2.0.0          # package the tagged commit
 pipx run twine check --strict dist/*.tar.gz
-pipx run twine upload dist/rocksdb-*.tar.gz
+pipx run twine upload dist/rocksdb_ng-*.tar.gz   # note: underscore (PEP 625)
 ```
 
 Alternatively, download the `sdist-docker` artifact from that tag's CI run — it

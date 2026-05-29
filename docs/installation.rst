@@ -13,7 +13,24 @@ This requires librocksdb-dev>=5.0
     apt-get install python-virtualenv python-dev librocksdb-dev
     virtualenv venv
     source venv/bin/activate
-    pip install python-rocksdb
+    pip install rocksdb-ng
+
+.. note::
+
+    The PyPI distribution is named ``rocksdb-ng`` (the plain ``rocksdb`` name is
+    taken by the upstream project this is forked from). The import name is
+    unchanged: after installing you still ``import rocksdb``.
+
+.. warning::
+
+    ``rocksdb-ng`` installs the same top-level ``rocksdb`` import package as the
+    original ``rocksdb`` distribution, so the two **cannot coexist** in one
+    environment — they would overwrite each other's files and pip will *not*
+    flag the conflict. If you are migrating from the original ``rocksdb``,
+    uninstall it first::
+
+        pip uninstall rocksdb
+        pip install rocksdb-ng
 
 From source
 ***********
@@ -64,4 +81,4 @@ Building python-rocksdb
     apt-get install python-virtualenv python-dev
     virtualenv venv
     source venv/bin/activate
-    pip install git+https://github.com/f321x/python-rocksdb.git#egg=python-rocksdb
+    pip install git+https://github.com/f321x/python-rocksdb.git#egg=rocksdb-ng

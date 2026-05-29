@@ -12,7 +12,13 @@ Quick install
 
 .. code-block:: bash
 
-    $ pip install rocksdb
+    $ pip install rocksdb-ng
+
+The distribution is published to PyPI as ``rocksdb-ng`` (the plain ``rocksdb``
+name belongs to the upstream project this is forked from). The import name is
+unchanged -- after installing you still ``import rocksdb``. Because it ships the
+same top-level ``rocksdb`` package, it cannot be co-installed with the original
+``rocksdb`` distribution; uninstall that first (``pip uninstall rocksdb``).
 
 
 Quick usage guide
