@@ -6,11 +6,18 @@ Database object
 
 .. py:class:: rocksdb.DB
 
-    .. py:method:: __init__(db_name, Options opts, read_only=False)
+    .. py:method:: __init__(db_name, Options opts, column_families=None, read_only=False)
 
         :param unicode db_name:  Name of the database to open
         :param opts: Options for this specific database
         :type opts: :py:class:`rocksdb.Options`
+        :param dict column_families:
+            Optional mapping of column family name (``bytes``) to a
+            :py:class:`rocksdb.ColumnFamilyOptions` instance. The default
+            column family is always opened automatically; if ``None`` only the
+            default column family is used. Note this is the third *positional*
+            argument, so pass ``read_only`` by keyword
+            (``rocksdb.DB(name, opts, read_only=True)``).
         :param bool read_only: If ``True`` the database is opened read-only.
                                All DB calls which modify data will raise an
                                Exception.

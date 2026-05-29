@@ -23,12 +23,11 @@ A more production ready open can look like this ::
 
     opts.table_factory = rocksdb.BlockBasedTableFactory(
         filter_policy=rocksdb.BloomFilterPolicy(10),
-        block_cache=rocksdb.LRUCache(2 * (1024 ** 3)),
-        block_cache_compressed=rocksdb.LRUCache(500 * (1024 ** 2)))
+        block_cache=rocksdb.LRUCache(2 * (1024 ** 3)))
 
     db = rocksdb.DB("test.db", opts)
 
-It assings a cache of 2.5G, uses a bloom filter for faster lookups and keeps
+It assigns a cache of 2G, uses a bloom filter for faster lookups and keeps
 more data (64 MB) in memory before writting a .sst file.
 
 About Bytes And Unicode

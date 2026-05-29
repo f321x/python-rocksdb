@@ -134,8 +134,8 @@ Options objects
 
     .. py:attribute:: bottommost_compression_opts
 
-            Different options for compression algorithms used by
-            :py:attr:`bottommost_compression` if it is enabled. To enable it,
+            Different options for compression algorithms used by the bottommost
+            level compression if it is enabled. To enable it,
             please see the definition of :py:attr:`compression_opts`.
 
     .. py:attribute:: compression
@@ -155,21 +155,13 @@ Options objects
         | *Type:* Member of :py:class:`rocksdb.CompressionType`
         | *Default:* :py:attr:`rocksdb.CompressionType.snappy_compression`
 
-    .. py:attribute:: bottommost_compression
-
-        Compression algorithm that will be used for the bottommost level that
-        contain files.
-
-        | *Type:* Member of :py:class:`rocksdb.CompressionType`
-        | *Default:* :py:attr:`rocksdb.CompressionType.no_compression`
-
     .. py:attribute:: compaction_pri
 
         If level compaction_style = kCompactionStyleLevel, for each level,
         which files are prioritized to be picked to compact.
 
         | *Type:* Member of :py:class:`rocksdb.CompactionPri`
-        | *Default:* :py:attr:`rocksdb.CompactionPri.kByCompensatedSize`
+        | *Default:* :py:attr:`rocksdb.CompactionPri.by_compensated_size`
 
     .. py:attribute:: max_compaction_bytes
 
@@ -397,7 +389,6 @@ Options objects
 
         * :py:class:`rocksdb.BlockBasedTableFactory`
         * :py:class:`rocksdb.PlainTableFactory`
-        * :py:class:`rocksdb.TotalOrderPlainTableFactory`
 
         *Default:* :py:class:`rocksdb.BlockBasedTableFactory`
 
@@ -804,12 +795,12 @@ CompactionPri
 
 .. py:class:: rocksdb.CompactionPri
 
-    Defines the support compression types
+    Defines the supported compaction priorities
 
-    .. py:attribute:: kByCompensatedSize
-    .. py:attribute:: kOldestLargestSeqFirst
-    .. py:attribute:: kOldestSmallestSeqFirst
-    .. py:attribute:: kMinOverlappingRatio
+    .. py:attribute:: by_compensated_size
+    .. py:attribute:: oldest_largest_seq_first
+    .. py:attribute:: oldest_smallest_seq_first
+    .. py:attribute:: min_overlapping_ratio
 
 CompressionTypes
 ================
@@ -948,12 +939,6 @@ https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats
         If ``True``, place whole keys in the filter (not just prefixes).
         This must generally be true for gets to be efficient.
 
-    :param bool enable_index_compression:
-        If set to ``None`` the rocksdb default of ``True`` is used.
-        Store index blocks on disk in compressed format. Setting this option to
-        ``False`` will avoid the overhead of decompression if index blocks are
-        evicted and read back.
-
     :param boot cache_index_and_filter_blocks:
         If set to ``None`` the rocksdb default of ``False`` is used.
         Indicates if we'd put index/filter blocks to the block cache.
@@ -1015,7 +1000,7 @@ https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats
     key prefix. Inside the hash bucket found, a binary search is executed for
     hash conflicts. Finally, a linear search is used.
 
-    .. py:method:: __init__(user_key_len=0, bloom_bits_per_key=10, hash_table_ratio=0.75, index_sparseness=10, huge_page_tlb_size=0, encoding_type='plain', full_scan_mode=False, store_index_in_file=False)
+    .. py:method:: __init__(user_key_len=0, bloom_bits_per_key=10, hash_table_ratio=0.75, index_sparseness=10, huge_page_tlb_size=0, encoding_type='plain', full_scan_mode=False)
 
         :param int user_key_len:
             Plain table has optimization for fix-sized keys, which can be
@@ -1067,11 +1052,6 @@ https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats
 
         :param bool full_scan_mode:
             Mode for reading the whole file one record by one without using the index.
-
-        :param bool store_index_in_file:
-            Compute plain table index and bloom filter during file building
-            and store it in file. When reading file, index will be mmaped
-            instead of recomputation.
 
 .. _memtable_factories_label:
 
