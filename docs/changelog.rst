@@ -49,6 +49,9 @@ Internal
 * Updated the BackupEngine bindings to the modern header
   (``rocksdb/utilities/backup_engine.h``) and ``BackupEngineOptions`` type.
 * Reworked the CI matrix and wheel build for Python 3.11–3.14 and RocksDB 9/10.
+* The documentation is now built and published by a GitHub Actions workflow to
+  GitHub Pages (https://f321x.github.io/python-rocksdb/), replacing the old
+  readthedocs.org site. It renders with Sphinx's bundled default theme.
 
 Version 0.8
 -----------

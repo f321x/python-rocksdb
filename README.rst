@@ -3,8 +3,8 @@ python-rocksdb
 
 Python bindings for RocksDB.
 
-See https://rocksdb-tina.readthedocs.io/ for a more comprehensive install and
-usage description.
+See https://f321x.github.io/python-rocksdb/ for a more comprehensive install
+and usage description.
 
 
 Quick install

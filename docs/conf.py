@@ -100,8 +100,11 @@ pygments_style = 'sphinx'
 # -- Options for HTML output ----------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-# html_theme = 'default'
+# a list of builtin themes. We set this explicitly because the docs are now
+# built and published by our own GitHub Pages workflow (.github/workflows/
+# docs.yml); the old readthedocs.org build used to inject a theme for us.
+# 'alabaster' is Sphinx's bundled default theme, so this adds no dependency.
+html_theme = 'alabaster'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
