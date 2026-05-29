@@ -1,0 +1,124 @@
+# vim:ts=2:sw=2:et:ai:sts=2
+name: 'sdist'
+
+# The reproducible source distribution is the ONLY artifact we build (no binary
+# wheels). CI builds it and asserts byte-for-byte reproducibility on every PR,
+# push to main, and v* tag -- under BOTH Docker and rootless Podman. CI NEVER
+# publishes: releases are uploaded to PyPI manually by a maintainer
+# (see contrib/sdist/README.md).
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'force_ci/all/**'     # For development, forcing all workflows to run.
+      - 'force_ci/sdist/**'   # For debugging and/or only forcing this workflow.
+    tags:
+      - 'v*'
+
+# Least privilege: every job only needs to read the repo. CI has no publish
+# credentials and mints no tokens.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # Canonical build (docker). Produces the artifact a maintainer can download and
+  # upload by hand, and asserts reproducibility.
+  build:
+    name: 'Build reproducible sdist (docker)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        name: 'Checkout source repository'
+        with:
+          # build.sh packages a `git archive` of the ref, so the .git dir and the
+          # ref's history must be present (not a shallow no-history checkout).
+          fetch-depth: 0
+
+      - name: 'Build the sdist twice and assert it is reproducible'
+        env:
+          CONTAINER_ENGINE: docker
+          # On pull_request, HEAD is the ephemeral merge commit (recomputed when
+          # main advances). Package the real PR-head (or pushed) commit so the
+          # tree and SOURCE_DATE_EPOCH are stable and match what a v* tag on that
+          # commit will later publish.
+          SDIST_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ./contrib/sdist/build.sh "$SDIST_REF"
+          sha1="$(sha256sum dist/*.tar.gz | awk '{print $1}')"
+          # The artifact must be owned by the invoking runner user (guards the
+          # tar-stream copy-out / rootless-ownership design).
+          test "$(stat -c %u dist/*.tar.gz)" = "$(id -u)"
+          rm -rf dist.run1 && mv dist dist.run1
+
+          ./contrib/sdist/build.sh "$SDIST_REF"
+          sha2="$(sha256sum dist/*.tar.gz | awk '{print $1}')"
+
+          echo "run #1: $sha1"
+          echo "run #2: $sha2"
+          if [ "$sha1" != "$sha2" ]; then
+            echo "::error::sdist is NOT reproducible across runs ($sha1 != $sha2)"
+            exit 1
+          fi
+          echo "$sha2" > dist/SHA256.txt
+          echo "::notice::reproducible sdist (docker): $sha2"
+
+      - name: 'Validate package metadata (twine check --strict)'
+        # Catches malformed PKG-INFO / unrenderable long_description before a
+        # maintainer uploads the tarball to the immutable PyPI index.
+        run: pipx run twine check --strict dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        name: 'Upload sdist'
+        with:
+          name: 'sdist-docker'
+          path: |
+            dist/*.tar.gz
+            dist/SHA256.txt
+
+  # Cross-engine parity: rootless Podman (the Fedora target) must produce the
+  # SAME bytes as Docker, and the artifact must end up owned by the invoking user.
+  cross-engine:
+    name: 'Reproducible under rootless podman (parity check)'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        name: 'Checkout source repository'
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        name: 'Fetch the docker-built reference hash'
+        with:
+          name: 'sdist-docker'
+          path: 'docker-build'
+
+      - name: 'Ensure rootless podman is available'
+        run: command -v podman || { sudo apt-get update && sudo apt-get install -y podman; }
+
+      - name: 'Build with rootless podman and compare to the docker artifact'
+        env:
+          CONTAINER_ENGINE: podman
+          SDIST_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ./contrib/sdist/build.sh "$SDIST_REF"
+          # Ownership must be the invoking user even under rootless podman: this
+          # is the guarantee the whole copy-out design exists for.
+          test "$(stat -c %u dist/*.tar.gz)" = "$(id -u)"
+          podman_sha="$(sha256sum dist/*.tar.gz | awk '{print $1}')"
+          docker_sha="$(cat docker-build/SHA256.txt)"
+          echo "docker: $docker_sha"
+          echo "podman: $podman_sha"
+          if [ "$docker_sha" != "$podman_sha" ]; then
+            echo "::error::Docker and Podman produced different sdists ($docker_sha != $podman_sha)"
+            exit 1
+          fi
+          echo "::notice::Docker and Podman produced identical sdists: $podman_sha"

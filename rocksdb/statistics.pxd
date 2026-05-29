@@ -25,20 +25,20 @@ cdef extern from "rocksdb/statistics.h" namespace "rocksdb":
         double min
 
     cdef cppclass Statistics:
-        const char* Type() nogil except+
-        uint64_t getTickerCount(uint32_t) nogil except+
+        const char* Type() except+ nogil
+        uint64_t getTickerCount(uint32_t) except+ nogil
         void histogramData(uint32_t type,
-                           HistogramData* const) nogil except+
-        string getHistogramString(uint32_t) nogil except+
-        void recordTick(uint32_t, uint64_t) nogil except+
-        void setTickerCount(uint32_t tickerType, uint64_t count) nogil except+
-        uint64_t getAndResetTickerCount(uint32_t) nogil except+
-        void reportTimeToHistogram(uint32_t, uint64_t) nogil except+
-        void measureTime(uint32_t, uint64_t) nogil except+
-        void recordInHistogram(uint32_t, uint64_t) nogil except+
-        Status Reset() nogil except+
-        string ToString() nogil except+
-        cpp_bool getTickerMap(map[string, uint64_t]*) nogil except+
-        cpp_bool HistEnabledForType(uint32_t type) nogil except+
-        void set_stats_level(StatsLevel) nogil except+
-        StatsLevel get_stats_level() nogil except+
+                           HistogramData* const) except+ nogil
+        string getHistogramString(uint32_t) except+ nogil
+        void recordTick(uint32_t, uint64_t) except+ nogil
+        void setTickerCount(uint32_t tickerType, uint64_t count) except+ nogil
+        uint64_t getAndResetTickerCount(uint32_t) except+ nogil
+        void reportTimeToHistogram(uint32_t, uint64_t) except+ nogil
+        void measureTime(uint32_t, uint64_t) except+ nogil
+        void recordInHistogram(uint32_t, uint64_t) except+ nogil
+        Status Reset() except+ nogil
+        string ToString() except+ nogil
+        cpp_bool getTickerMap(map[string, uint64_t]*) except+ nogil
+        cpp_bool HistEnabledForType(uint32_t type) except+ nogil
+        void set_stats_level(StatsLevel) except+ nogil
+        StatsLevel get_stats_level() except+ nogil

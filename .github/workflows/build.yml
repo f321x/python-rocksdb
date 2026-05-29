@@ -9,6 +9,11 @@ on:
       - 'force_ci/all/**'    # For development, forcing all workflows to run.
       - 'force_ci/build/**'  # For debugging and/or only forcing this workflow.
 
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   # Build the RocksDB C library and cache the result.
   librocksdb:
@@ -19,10 +24,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        rocksdb_ver: ['v6.29.3', 'v6.25.3', 'v6.11.4']
+        rocksdb_ver: ['v10.10.1', 'v9.10.0']
 
     steps:
-      - uses: actions/cache@v2
+      - uses: actions/cache@v5
         id: cache-librocksdb
         with:
           key: ${{ matrix.os }}-librocksdb-${{ matrix.rocksdb_ver }}
@@ -36,6 +41,7 @@ jobs:
 
       - name: 'Clone & build RocksDB ${{ matrix.rocksdb_ver }}'
         if: steps.cache-librocksdb.outputs.cache-hit != 'true'
+        # RocksDB >= 7 requires a C++17 toolchain; ubuntu-latest's GCC is fine.
         run: >
           git clone https://github.com/facebook/rocksdb --depth 1
           --branch ${{ matrix.rocksdb_ver }} ${{ env.LIBROCKSDB_PATH }} &&
@@ -50,19 +56,21 @@ jobs:
     env:
       LIBROCKSDB_PATH: /opt/rocksdb-${{ matrix.rocksdb_ver }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        py_ver: ['3.7', '3.8', '3.9']
-        rocksdb_ver: ['v6.29.3', 'v6.25.3', 'v6.11.4']
+        py_ver: ['3.11', '3.12', '3.13', '3.14']
+        rocksdb_ver: ['v10.10.1', 'v9.10.0']
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
         name: 'Checkout source repository'
 
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v6
         name: 'Set up Python ${{ matrix.py_ver }}'
         with:
           python-version: ${{ matrix.py_ver }}
+          allow-prereleases: true
 
       - name: 'Install C libraries'
         # XXX(Tina): The non-development versions are sufficient, but package
@@ -72,7 +80,7 @@ jobs:
           libgflags-dev libzstd-dev
 
       # Recover the pre-built C library.
-      - uses: actions/cache@v2
+      - uses: actions/cache@v5
         id: cache-librocksdb
         with:
           key: ${{ matrix.os }}-librocksdb-${{ matrix.rocksdb_ver }}

@@ -12,4 +12,4 @@ cdef extern from "rocksdb/status.h" namespace "rocksdb":
         cpp_bool IsIOError() nogil const
         cpp_bool IsMergeInProgress() nogil const
         cpp_bool IsIncomplete() nogil const
-        string ToString() nogil except+
+        string ToString() except+ nogil

@@ -1,6 +1,58 @@
 Changelog
 *********
 
+Version 2.0
+-----------
+
+Modernization release: builds and passes the test suite against current
+RocksDB (tested on 9.10 and 10.10), CPython 3.11–3.14, and Cython 3.
+
+Requirements
+~~~~~~~~~~~~
+
+* Requires **RocksDB >= 9** (built with a C++17 toolchain; the extension is now
+  compiled with ``-std=c++17``).
+* Requires **CPython 3.11–3.14**; Python 3.10 and earlier are no longer
+  supported.
+* Building from source requires **Cython >= 3.2.5** and **setuptools >= 80**
+  (declared in ``pyproject.toml``).
+
+Backwards-incompatible changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These follow the removal of the corresponding APIs from upstream RocksDB:
+
+* **Custom Python filter policies are no longer supported.** RocksDB removed the
+  legacy ``FilterPolicy::CreateFilter``/``KeyMayMatch`` ("v1") interface, so
+  ``rocksdb.interfaces.FilterPolicy`` has been removed and passing a custom
+  filter object to :py:class:`rocksdb.BlockBasedTableFactory` now raises
+  ``TypeError``. The built-in :py:class:`rocksdb.BloomFilterPolicy` is still
+  supported; its ``bits_per_key`` argument is now a float.
+* :py:class:`rocksdb.BlockBasedTableFactory` no longer accepts the
+  ``hash_index_allow_collision`` or ``block_cache_compressed`` keyword
+  arguments (both removed from RocksDB).
+* The following :py:class:`rocksdb.Options` attributes were removed because the
+  underlying RocksDB fields were deleted: ``base_background_compactions``,
+  ``max_background_compactions``, ``new_table_reader_for_compaction_inputs``,
+  ``preserve_deletes``, ``access_hint_on_compaction_start`` (and the
+  ``AccessHint`` enum), and ``max_mem_compaction_level``.
+
+Internal
+~~~~~~~~
+
+* Migrated the Cython sources to Cython 3: callbacks invoked from C++
+  (comparator, merge operator, slice transform) are now declared ``noexcept``
+  so that exceptions raised in Python are reported as Python exceptions instead
+  of unwinding into C++.
+* Fixed error-message propagation from callbacks under Python 3 (the previous
+  ``<bytes>str(...)`` cast produced garbage on Python 3).
+* Updated the BackupEngine bindings to the modern header
+  (``rocksdb/utilities/backup_engine.h``) and ``BackupEngineOptions`` type.
+* Reworked the CI matrix and wheel build for Python 3.11–3.14 and RocksDB 9/10.
+* The documentation is now built and published by a GitHub Actions workflow to
+  GitHub Pages (https://f321x.github.io/python-rocksdb/), replacing the old
+  readthedocs.org site. It renders with Sphinx's bundled default theme.
+
 Version 0.8
 -----------
 
@@ -131,7 +183,7 @@ This version works with RocksDB v3.12.
 * Publish to pypi.
 
 Backward Incompatible Changes:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * Changed API of :py:meth:`rocksdb.DB.compact_range`.
 
@@ -145,7 +197,7 @@ Version 0.3
 This version works with RocksDB version v3.11.
 
 Backward Incompatible Changes:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Prefix Seeks:**
 
@@ -193,7 +245,7 @@ In newer versions of rocksdb a bunch of options were moved or removed.
 
 
 New:
-^^^^
+~~~~
 * Make CompactRange available: :py:meth:`rocksdb.DB.compact_range`
 * Add init options to :py:class:`rocksdb.BlockBasedTableFactory`
 * Add more option to :py:class:`rocksdb.PlainTableFactory`

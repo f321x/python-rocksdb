@@ -72,13 +72,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         ColumnFamilyOptions(const Options& options)
         void Dump(Logger*)
 
-    # This needs to be in _rocksdb.pxd so it will export into python
-    cpdef enum AccessHint "rocksdb::DBOptions::AccessHint":
-       NONE,
-       NORMAL,
-       SEQUENTIAL,
-       WILLNEED
-
     cpdef enum WALRecoveryMode:
         kTolerateCorruptedTailRecords
         kAbsoluteConsistency
@@ -93,9 +86,9 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         DbPath(const string&, uint64_t) except +
 
     cdef cppclass DBOptions:
-        DBOptions* OldDefaults(int, int) nogil except+
-        DBOptions* OptimizeForSmallDb(shared_ptr[Cache]*) nogil except+
-        void IncreaseParallelism(int) nogil except+
+        DBOptions* OldDefaults(int, int) except+ nogil
+        DBOptions* OptimizeForSmallDb(shared_ptr[Cache]*) except+ nogil
+        void IncreaseParallelism(int) except+ nogil
         cpp_bool create_if_missing
         cpp_bool create_missing_column_families
         cpp_bool error_if_exists
@@ -115,8 +108,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         string wal_dir
         uint64_t delete_obsolete_files_period_micros
         int max_background_jobs
-        int base_background_compactions
-        int max_background_compactions
         uint32_t max_subcompactions
         int max_background_flushes
         size_t max_log_file_size
@@ -141,15 +132,13 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         cpp_bool advise_random_on_open
         size_t db_write_buffer_size
         # TODO shared_ptr[WriteBufferManager] write_buffer_manager
-        AccessHint access_hint_on_compaction_start
-        cpp_bool new_table_reader_for_compaction_inputs
         size_t compaction_readahead_size
         size_t random_access_max_buffer_size
         size_t writable_file_max_buffer_size
         cpp_bool use_adaptive_mutex
-        DBOptions() nogil except+
-        DBOptions(const Options&) nogil except+
-        void Dump(Logger*) nogil except+
+        DBOptions() except+ nogil
+        DBOptions(const Options&) except+ nogil
+        void Dump(Logger*) except+ nogil
 
         uint64_t bytes_per_sync
         uint64_t wal_bytes_per_sync
@@ -175,7 +164,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         cpp_bool avoid_flush_during_recovery
         cpp_bool avoid_flush_during_shutdown
         cpp_bool allow_ingest_behind
-        cpp_bool preserve_deletes
         cpp_bool two_write_queues
         cpp_bool manual_wal_flush
         cpp_bool atomic_flush
@@ -188,11 +176,11 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
     cdef cppclass Options(DBOptions, ColumnFamilyOptions):
         Options() except+
         Options(const DBOptions&, const ColumnFamilyOptions&) except+
-        Options* OldDefaults(int, int) nogil except+
-        void Dump(Logger*) nogil except+
-        void DumpCFOptions(Logger*) nogil except+
-        Options* PrepareForBulkLoad() nogil except+
-        Options* OptimizeForSmallDb() nogil except+
+        Options* OldDefaults(int, int) except+ nogil
+        void Dump(Logger*) except+ nogil
+        void DumpCFOptions(Logger*) except+ nogil
+        Options* PrepareForBulkLoad() except+ nogil
+        Options* OptimizeForSmallDb() except+ nogil
 
     ctypedef enum ReadTier:
         kReadAllTier
@@ -223,8 +211,8 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         const Slice* iter_start_ts
         # TODO std::chrono::microseconds deadline
         uint64_t value_size_soft_limit
-        ReadOptions() nogil except+
-        ReadOptions(cpp_bool, cpp_bool) nogil except+
+        ReadOptions() except+ nogil
+        ReadOptions(cpp_bool, cpp_bool) except+ nogil
 
     cdef cppclass WriteOptions:
         cpp_bool sync
@@ -234,18 +222,18 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         cpp_bool low_pri
         cpp_bool memtable_insert_hint_per_batch
         const Slice* timestamp
-        WriteOptions() nogil except+
+        WriteOptions() except+ nogil
 
     cdef cppclass FlushOptions:
         cpp_bool wait
         cpp_bool allow_write_stall
-        FlushOptions() nogil except+
+        FlushOptions() except+ nogil
 
     cdef cppclass CompactionOptions:
         CompressionType compression
         uint64_t output_file_size_limit
         uint32_t max_subcompactions
-        CompactionOptions() nogil except+
+        CompactionOptions() except+ nogil
 
     ctypedef enum BottommostLevelCompaction:
         blc_skip "rocksdb::BottommostLevelCompaction::kSkip"

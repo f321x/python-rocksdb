@@ -9,7 +9,7 @@ from Cython.Build import cythonize
 from setuptools import Extension, setup
 
 extra_compile_args = [
-    '-std=c++11',
+    '-std=c++17',
     '-O3',
     '-Wall',
     '-Wextra',
@@ -19,10 +19,7 @@ extra_compile_args = [
 ]
 
 if platform.system() == 'Darwin':
-    extra_compile_args += ['-mmacosx-version-min=10.7', '-stdlib=libc++']
-
-if sys.version_info < (3 , 0):
-    raise Exception('python-rocksdb requires Python 3.x')
+    extra_compile_args += ['-mmacosx-version-min=10.13', '-stdlib=libc++']
 
 try:
     ext_args = pkgconfig.parse('rocksdb')
@@ -30,10 +27,25 @@ except pkgconfig.PackageNotFoundError:
     include_path = os.environ.get('INCLUDE_PATH')
     library_path = os.environ.get('LIBRARY_PATH')
 
+    if not include_path and not library_path:
+        sys.stderr.write(
+            'WARNING: pkg-config could not find a `rocksdb` package and neither '
+            'INCLUDE_PATH nor LIBRARY_PATH is set. Falling back to the compiler\'s '
+            'default search paths. If the build fails to find <rocksdb/db.h> or '
+            '-lrocksdb, install librocksdb-dev (providing rocksdb.pc) or set '
+            'INCLUDE_PATH/LIBRARY_PATH to your RocksDB installation.\n'
+        )
+
     ext_args = {
         'include_dirs': include_path.split(os.pathsep) if include_path else [],
         'library_dirs': library_path.split(os.pathsep) if library_path else [],
-        'libraries': ['rocksdb', 'snappy', 'bz2', 'z', 'lz4'],
+        # Only link librocksdb. A shared librocksdb.so already declares its own
+        # compression-library dependencies (snappy/bz2/z/lz4/zstd), so listing
+        # them here just risks a spurious `cannot find -l<lib>` when a `-dev`
+        # package is absent or RocksDB was built without that codec. If you link
+        # a *static* librocksdb.a, re-add the codecs you compiled it with (or,
+        # preferably, install rocksdb.pc so the pkgconfig path above is used).
+        'libraries': ['rocksdb'],
     }
 
 rocksdb_extension = Extension(

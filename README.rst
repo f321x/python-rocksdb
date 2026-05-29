@@ -3,8 +3,8 @@ python-rocksdb
 
 Python bindings for RocksDB.
 
-See https://rocksdb-tina.readthedocs.io/ for a more comprehensive install and
-usage description.
+See https://f321x.github.io/python-rocksdb/ for a more comprehensive install
+and usage description.
 
 
 Quick install
@@ -12,7 +12,13 @@ Quick install
 
 .. code-block:: bash
 
-    $ pip install rocksdb
+    $ pip install rocksdb-ng
+
+The distribution is published to PyPI as ``rocksdb-ng`` (the plain ``rocksdb``
+name belongs to the upstream project this is forked from). The import name is
+unchanged -- after installing you still ``import rocksdb``. Because it ships the
+same top-level ``rocksdb`` package, it cannot be co-installed with the original
+``rocksdb`` distribution; uninstall that first (``pip uninstall rocksdb``).
 
 
 Quick usage guide
@@ -40,3 +46,8 @@ unfinished pull requests.
 .. _twmht: https://github.com/twmht
 .. _pyrocksdb: https://github.com/stephan-hof/pyrocksdb
 .. _stephan-hof: https://github.com/stephan-hof
+
+
+Disclaimer
+----------
+This python-rocksdb fork was developed mostly using LLM coding agents.

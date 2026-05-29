@@ -47,7 +47,6 @@ from .status cimport Status
 import sys
 from .interfaces import MergeOperator as IMergeOperator
 from .interfaces import AssociativeMergeOperator as IAssociativeMergeOperator
-from .interfaces import FilterPolicy as IFilterPolicy
 from .interfaces import Comparator as IComparator
 from .interfaces import SliceTransform as ISliceTransform
 
@@ -68,12 +67,9 @@ ctypedef const filter_policy.FilterPolicy ConstFilterPolicy
 cdef extern from "cpp/utils.hpp" namespace "py_rocks":
     cdef const Slice* vector_data(vector[Slice]&)
 
-# Prepare python for threaded usage.
-# Python callbacks (merge, comparator)
-# could be executed in a rocksdb background thread (eg. compaction).
-cdef extern from "Python.h":
-    void PyEval_InitThreads()
-PyEval_InitThreads()
+# Note: since Python 3.7 the GIL is always initialized at interpreter startup,
+# so the old PyEval_InitThreads() call (deprecated in 3.9, removed in 3.14) is
+# no longer needed for Python callbacks running in rocksdb background threads.
 
 ## Here comes the stuff to wrap the status to exception
 cdef check_status(const Status& st):
@@ -203,14 +199,14 @@ cdef int compare_callback(
     logger.Logger* log,
     string& error_msg,
     const Slice& a,
-    const Slice& b) with gil:
+    const Slice& b) noexcept with gil:
 
     try:
         return (<object>ctx).compare(slice_to_bytes(a), slice_to_bytes(b))
     except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in compare callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in compare callback: %s", <char*>tb)
+        error_msg.assign(str(error).encode('utf-8'))
 
 BytewiseComparator = PyBytewiseComparator
 #########################################
@@ -230,92 +226,14 @@ cdef class PyFilterPolicy(object):
         pass
 
 @cython.internal
-cdef class PyGenericFilterPolicy(PyFilterPolicy):
-    cdef shared_ptr[filter_policy.FilterPolicyWrapper] policy
-    cdef object ob
-
-    def __cinit__(self, object ob):
-        if not isinstance(ob, IFilterPolicy):
-            raise TypeError("%s is not of type %s" % (ob, IFilterPolicy))
-
-        self.ob = ob
-        self.policy.reset(new filter_policy.FilterPolicyWrapper(
-                bytes_to_string(ob.name()),
-                <void*>ob,
-                create_filter_callback,
-                key_may_match_callback))
-
-    cdef object get_ob(self):
-        return self.ob
-
-    cdef shared_ptr[ConstFilterPolicy] get_policy(self):
-        return <shared_ptr[ConstFilterPolicy]>(self.policy)
-
-    cdef set_info_log(self, shared_ptr[logger.Logger] info_log):
-        self.policy.get().set_info_log(info_log)
-
-
-cdef void create_filter_callback(
-    void* ctx,
-    logger.Logger* log,
-    string& error_msg,
-    const Slice* keys,
-    int n,
-    string* dst) with gil:
-
-    try:
-        ret = (<object>ctx).create_filter(
-            [slice_to_bytes(keys[i]) for i in range(n)])
-        dst.append(bytes_to_string(ret))
-    except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in create filter callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
-
-cdef cpp_bool key_may_match_callback(
-    void* ctx,
-    logger.Logger* log,
-    string& error_msg,
-    const Slice& key,
-    const Slice& filt) with gil:
-
-    try:
-        return (<object>ctx).key_may_match(
-            slice_to_bytes(key),
-            slice_to_bytes(filt))
-    except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in key_mach_match callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
-
-@cython.internal
 cdef class PyBloomFilterPolicy(PyFilterPolicy):
     cdef shared_ptr[ConstFilterPolicy] policy
 
-    def __cinit__(self, int bits_per_key):
+    def __cinit__(self, double bits_per_key):
         self.policy.reset(filter_policy.NewBloomFilterPolicy(bits_per_key))
 
     def name(self):
         return PyBytes_FromString(self.policy.get().Name())
-
-    def create_filter(self, keys):
-        cdef string dst
-        cdef vector[Slice] c_keys
-
-        for key in keys:
-            c_keys.push_back(bytes_to_slice(key))
-
-        self.policy.get().CreateFilter(
-            vector_data(c_keys),
-            <int>c_keys.size(),
-            cython.address(dst))
-
-        return string_to_bytes(dst)
-
-    def key_may_match(self, key, filter_):
-        return self.policy.get().KeyMayMatch(
-            bytes_to_slice(key),
-            bytes_to_slice(filter_))
 
     cdef object get_ob(self):
         return self
@@ -388,7 +306,7 @@ cdef cpp_bool merge_callback(
     const Slice* existing_value,
     const Slice& value,
     string* new_value,
-    logger.Logger* log) with gil:
+    logger.Logger* log) noexcept with gil:
 
     if existing_value == NULL:
         py_existing_value = None
@@ -407,8 +325,8 @@ cdef cpp_bool merge_callback(
         return False
 
     except:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in merge_callback: %s", <bytes>tb)
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in merge_callback: %s", <char*>tb)
         return False
 
 cdef cpp_bool full_merge_callback(
@@ -417,7 +335,7 @@ cdef cpp_bool full_merge_callback(
     const Slice* existing_value,
     const deque[string]& op_list,
     string* new_value,
-    logger.Logger* log) with gil:
+    logger.Logger* log) noexcept with gil:
 
     if existing_value == NULL:
         py_existing_value = None
@@ -436,8 +354,8 @@ cdef cpp_bool full_merge_callback(
         return False
 
     except:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in full_merge_callback: %s", <bytes>tb)
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in full_merge_callback: %s", <char*>tb)
         return False
 
 cdef cpp_bool partial_merge_callback(
@@ -446,7 +364,7 @@ cdef cpp_bool partial_merge_callback(
     const Slice& left_op,
     const Slice& right_op,
     string* new_value,
-    logger.Logger* log) with gil:
+    logger.Logger* log) noexcept with gil:
 
     try:
         ret = (<object>ctx).partial_merge(
@@ -460,8 +378,8 @@ cdef cpp_bool partial_merge_callback(
         return False
 
     except:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in partial_merge_callback: %s", <bytes>tb)
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in partial_merge_callback: %s", <char*>tb)
         return False
 ##############################################
 
@@ -523,7 +441,7 @@ cdef Slice slice_transform_callback(
     void* ctx,
     logger.Logger* log,
     string& error_msg,
-    const Slice& src) with gil:
+    const Slice& src) noexcept with gil:
 
     cdef size_t offset
     cdef size_t size
@@ -538,35 +456,35 @@ cdef Slice slice_transform_callback(
 
         return Slice(src.data() + offset, size)
     except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in slice transform callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
+        error_msg.assign(str(error).encode('utf-8'))
 
 cdef cpp_bool slice_in_domain_callback(
     void* ctx,
     logger.Logger* log,
     string& error_msg,
-    const Slice& src) with gil:
+    const Slice& src) noexcept with gil:
 
     try:
         return (<object>ctx).in_domain(slice_to_bytes(src))
     except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in slice transform callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
+        error_msg.assign(str(error).encode('utf-8'))
 
 cdef cpp_bool slice_in_range_callback(
     void* ctx,
     logger.Logger* log,
     string& error_msg,
-    const Slice& src) with gil:
+    const Slice& src) noexcept with gil:
 
     try:
         return (<object>ctx).in_range(slice_to_bytes(src))
     except BaseException as error:
-        tb = traceback.format_exc()
-        logger.Log(log, "Error in slice transform callback: %s", <bytes>tb)
-        error_msg.assign(<bytes>str(error))
+        tb = traceback.format_exc().encode('utf-8')
+        logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
+        error_msg.assign(str(error).encode('utf-8'))
 ###########################################
 
 ## Here are the TableFactories
@@ -585,10 +503,8 @@ cdef class BlockBasedTableFactory(PyTableFactory):
 
     def __init__(self,
             index_type='binary_search',
-            py_bool hash_index_allow_collision=True,
             checksum='crc32',
             PyCache block_cache=None,
-            PyCache block_cache_compressed=None,
             filter_policy=None,
             no_block_cache=False,
             block_size=None,
@@ -608,11 +524,6 @@ cdef class BlockBasedTableFactory(PyTableFactory):
         else:
             raise ValueError("Unknown index_type: %s" % index_type)
 
-        if hash_index_allow_collision:
-            table_options.hash_index_allow_collision = True
-        else:
-            table_options.hash_index_allow_collision = False
-
         if checksum == 'crc32':
             table_options.checksum = table_factory.kCRC32c
         elif checksum == 'xxhash':
@@ -622,9 +533,6 @@ cdef class BlockBasedTableFactory(PyTableFactory):
 
         if block_cache is not None:
             table_options.block_cache = block_cache.get_cache()
-
-        if block_cache_compressed is not None:
-            table_options.block_cache_compressed = block_cache_compressed.get_cache()
 
         if no_block_cache:
             table_options.no_block_cache = True
@@ -659,13 +567,16 @@ cdef class BlockBasedTableFactory(PyTableFactory):
         # Set the filter_policy
         self.py_filter_policy = None
         if filter_policy is not None:
-            if isinstance(filter_policy, PyFilterPolicy):
-                if (<PyFilterPolicy?>filter_policy).get_policy().get() == NULL:
-                    raise Exception("Cannot set filter policy: %s" % filter_policy)
-                self.py_filter_policy = filter_policy
-            else:
-                self.py_filter_policy = PyGenericFilterPolicy(filter_policy)
-
+            if not isinstance(filter_policy, PyFilterPolicy):
+                raise TypeError(
+                    "filter_policy must be a rocksdb.BloomFilterPolicy instance; "
+                    "custom Python filter policies are no longer supported because "
+                    "RocksDB removed the legacy FilterPolicy.CreateFilter/KeyMayMatch "
+                    "API."
+                )
+            if (<PyFilterPolicy?>filter_policy).get_policy().get() == NULL:
+                raise Exception("Cannot set filter policy: %s" % filter_policy)
+            self.py_filter_policy = filter_policy
             table_options.filter_policy = self.py_filter_policy.get_policy()
 
         self.factory.reset(table_factory.NewBlockBasedTableFactory(table_options))
@@ -1076,12 +987,6 @@ cdef class ColumnFamilyOptions(object):
         def __set__(self, value):
             self.copts.level0_stop_writes_trigger = value
 
-    property max_mem_compaction_level:
-        def __get__(self):
-            return self.copts.max_mem_compaction_level
-        def __set__(self, value):
-            self.copts.max_mem_compaction_level = value
-
     property target_file_size_base:
         def __get__(self):
             return self.copts.target_file_size_base
@@ -1393,18 +1298,6 @@ cdef class Options(ColumnFamilyOptions):
         def __set__(self, value):
             self.opts.max_background_jobs = value
 
-    property base_background_compactions:
-        def __get__(self):
-            return self.opts.base_background_compactions
-        def __set__(self, value):
-            self.opts.base_background_compactions = value
-
-    property max_background_compactions:
-        def __get__(self):
-            return self.opts.max_background_compactions
-        def __set__(self, value):
-            self.opts.max_background_compactions = value
-
     property max_subcompactions:
         def __get__(self):
             return self.opts.max_subcompactions
@@ -1542,19 +1435,6 @@ cdef class Options(ColumnFamilyOptions):
             return self.opts.db_write_buffer_size
         def __set__(self, value):
             self.opts.db_write_buffer_size = value
-
-  # TODO: need to remove -Wconversion to make this work
-  # property access_hint_on_compaction_start:
-  #     def __get__(self):
-  #         return self.opts.access_hint_on_compaction_start
-  #     def __set__(self, AccessHint value):
-  #         self.opts.access_hint_on_compaction_start = value
-
-    property new_table_reader_for_compaction_inputs:
-        def __get__(self):
-            return self.opts.new_table_reader_for_compaction_inputs
-        def __set__(self, value):
-            self.opts.new_table_reader_for_compaction_inputs = value
 
     property compaction_readahead_size:
         def __get__(self):
@@ -1713,12 +1593,6 @@ cdef class Options(ColumnFamilyOptions):
             return self.opts.allow_ingest_behind
         def __set__(self, value):
             self.opts.allow_ingest_behind = value
-
-    property preserve_deletes:
-        def __get__(self):
-            return self.opts.preserve_deletes
-        def __set__(self, value):
-            self.opts.preserve_deletes = value
 
     property two_write_queues:
         def __get__(self):
@@ -2049,9 +1923,12 @@ cdef class DB(object):
             self.cf_handles.append(wrapper)
 
     cdef inject_loggers(self, Options opts):
-        # Inject the loggers into the python callbacks
-        cdef shared_ptr[logger.Logger] info_log = self.wrapped_db.GetOptions(
-            self.wrapped_db.DefaultColumnFamily()).info_log
+        # Inject the loggers into the python callbacks.
+        # GetOptions() returns Options by value, so hold it in a local before
+        # reading info_log to avoid binding to a destroyed temporary.
+        cdef options.Options db_opts = self.wrapped_db.GetOptions(
+            self.wrapped_db.DefaultColumnFamily())
+        cdef shared_ptr[logger.Logger] info_log = db_opts.info_log
         if opts.py_comparator is not None:
             opts.py_comparator.set_info_log(info_log)
 
@@ -2065,8 +1942,9 @@ cdef class DB(object):
             if not copts:
                 continue
 
-            info_log = self.wrapped_db.GetOptions(
-                self.column_family_handles[idx]).info_log
+            db_opts = self.wrapped_db.GetOptions(
+                self.column_family_handles[idx])
+            info_log = db_opts.info_log
 
             if copts.py_comparator is not None:
                 copts.py_comparator.set_info_log(info_log)
@@ -2872,7 +2750,7 @@ cdef class BackupEngine(object):
         c_backup_dir = path_to_string(backup_dir)
         st = backup.BackupEngine_Open(
             env.Env_Default(),
-            backup.BackupableDBOptions(c_backup_dir),
+            backup.BackupEngineOptions(c_backup_dir),
             cython.address(self.engine))
 
         check_status(st)
