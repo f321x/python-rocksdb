@@ -206,7 +206,7 @@ cdef int compare_callback(
     except BaseException as error:
         tb = traceback.format_exc().encode('utf-8')
         logger.Log(log, "Error in compare callback: %s", <char*>tb)
-        error_msg.assign(str(error).encode('utf-8'))
+        error_msg.assign(bytes_to_string(str(error).encode('utf-8')))
 
 BytewiseComparator = PyBytewiseComparator
 #########################################
@@ -458,7 +458,7 @@ cdef Slice slice_transform_callback(
     except BaseException as error:
         tb = traceback.format_exc().encode('utf-8')
         logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
-        error_msg.assign(str(error).encode('utf-8'))
+        error_msg.assign(bytes_to_string(str(error).encode('utf-8')))
 
 cdef cpp_bool slice_in_domain_callback(
     void* ctx,
@@ -471,7 +471,7 @@ cdef cpp_bool slice_in_domain_callback(
     except BaseException as error:
         tb = traceback.format_exc().encode('utf-8')
         logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
-        error_msg.assign(str(error).encode('utf-8'))
+        error_msg.assign(bytes_to_string(str(error).encode('utf-8')))
 
 cdef cpp_bool slice_in_range_callback(
     void* ctx,
@@ -484,7 +484,7 @@ cdef cpp_bool slice_in_range_callback(
     except BaseException as error:
         tb = traceback.format_exc().encode('utf-8')
         logger.Log(log, "Error in slice transform callback: %s", <char*>tb)
-        error_msg.assign(str(error).encode('utf-8'))
+        error_msg.assign(bytes_to_string(str(error).encode('utf-8')))
 ###########################################
 
 ## Here are the TableFactories
@@ -660,7 +660,6 @@ cdef class CompressionType(object):
     lz4hc_compression = u'lz4hc_compression'
     xpress_compression = u'xpress_compression'
     zstd_compression = u'zstd_compression'
-    zstdnotfinal_compression = u'zstdnotfinal_compression'
     disable_compression = u'disable_compression'
 
 cdef class CompactionPri(object):
@@ -926,8 +925,6 @@ cdef class ColumnFamilyOptions(object):
                 return CompressionType.xpress_compression
             elif self.copts.compression == options.kZSTD:
                 return CompressionType.zstd_compression
-            elif self.copts.compression == options.kZSTDNotFinalCompression:
-                return CompressionType.zstdnotfinal_compression
             elif self.copts.compression == options.kDisableCompressionOption:
                 return CompressionType.disable_compression
             else:
@@ -948,8 +945,6 @@ cdef class ColumnFamilyOptions(object):
                 self.copts.compression = options.kLZ4HCCompression
             elif value == CompressionType.zstd_compression:
                 self.copts.compression = options.kZSTD
-            elif value == CompressionType.zstdnotfinal_compression:
-                self.copts.compression = options.kZSTDNotFinalCompression
             elif value == CompressionType.disable_compression:
                 self.copts.compression = options.kDisableCompressionOption
             else:
@@ -1442,12 +1437,6 @@ cdef class Options(ColumnFamilyOptions):
         def __set__(self, value):
             self.opts.compaction_readahead_size = value
 
-    property random_access_max_buffer_size:
-        def __get__(self):
-            return self.opts.random_access_max_buffer_size
-        def __set__(self, value):
-            self.opts.random_access_max_buffer_size = value
-
     property writable_file_max_buffer_size:
         def __get__(self):
             return self.opts.writable_file_max_buffer_size
@@ -1563,12 +1552,6 @@ cdef class Options(ColumnFamilyOptions):
             else:
                 self.py_row_cache = value
                 self.opts.row_cache = self.py_row_cache.get_cache()
-
-    property fail_if_options_file_error:
-        def __get__(self):
-            return self.opts.fail_if_options_file_error
-        def __set__(self, value):
-            self.opts.fail_if_options_file_error = value
 
     property dump_malloc_stats:
         def __get__(self):

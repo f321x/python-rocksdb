@@ -39,7 +39,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         kLZ4HCCompression
         kXpressCompression
         kZSTD
-        kZSTDNotFinalCompression
         kDisableCompressionOption
 
     cdef cppclass ColumnFamilyOptions(AdvancedColumnFamilyOptions):
@@ -133,7 +132,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         size_t db_write_buffer_size
         # TODO shared_ptr[WriteBufferManager] write_buffer_manager
         size_t compaction_readahead_size
-        size_t random_access_max_buffer_size
         size_t writable_file_max_buffer_size
         cpp_bool use_adaptive_mutex
         DBOptions() except+ nogil
@@ -159,7 +157,6 @@ cdef extern from "rocksdb/options.h" namespace "rocksdb":
         cpp_bool allow_2pc
         shared_ptr[Cache] row_cache
         # TODO WalFilter* wal_filter
-        cpp_bool fail_if_options_file_error
         cpp_bool dump_malloc_stats
         cpp_bool avoid_flush_during_recovery
         cpp_bool avoid_flush_during_shutdown

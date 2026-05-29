@@ -6,12 +6,12 @@ Installing
 With distro package and pypi
 ****************************
 
-This requires librocksdb-dev>=5.0
+This requires librocksdb-dev>=9 (RocksDB 9.x or 10.x)
 
 .. code-block:: bash
 
-    apt-get install python-virtualenv python-dev librocksdb-dev
-    virtualenv venv
+    apt-get install python3-venv python3-dev librocksdb-dev
+    python3 -m venv venv
     source venv/bin/activate
     pip install rocksdb-ng
 
@@ -78,7 +78,7 @@ Building python-rocksdb
 
 .. code-block:: bash
 
-    apt-get install python-virtualenv python-dev
-    virtualenv venv
+    apt-get install python3-venv python3-dev
+    python3 -m venv venv
     source venv/bin/activate
     pip install git+https://github.com/f321x/python-rocksdb.git#egg=rocksdb-ng

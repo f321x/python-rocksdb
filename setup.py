@@ -9,7 +9,10 @@ from Cython.Build import cythonize
 from setuptools import Extension, setup
 
 extra_compile_args = [
-    '-std=c++17',
+    # RocksDB 10.x headers use C++20 features (defaulted `operator==`, `using
+    # enum`), so the binding must be compiled as C++20. C++20 also compiles the
+    # 9.x headers fine, so this is safe across the supported RocksDB range.
+    '-std=c++20',
     '-O3',
     '-Wall',
     '-Wextra',
