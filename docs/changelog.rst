@@ -1,6 +1,19 @@
 Changelog
 *********
 
+Unreleased
+----------
+
+* **Lowered the minimum supported RocksDB to 8.x** (from 9). The binding builds
+  and passes the test suite against RocksDB 8.9, so the supported/tested range is
+  now 8.x–10.x.
+* **The build now fails fast on an unsupported RocksDB.** ``setup.py`` detects the
+  RocksDB version (via ``pkg-config`` / ``<rocksdb/version.h>``) and aborts with a
+  clear message when it is older than the supported floor, instead of breaking
+  later with an opaque compiler error. A version newer than the tested range only
+  warns. The force-included ``rocksdb/cpp/version_check.hpp`` is a compile-time
+  backstop for when the version cannot be detected before compiling.
+
 Version 2.0
 -----------
 

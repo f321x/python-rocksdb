@@ -21,10 +21,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # python-rocksdb 2.x requires RocksDB >= 9 and Cython >= 3, so only
-        # Debian trixie (13) and newer ship compatible system packages. We test
-        # trixie (stable) only; sid (unstable) is a rolling target that will
-        # eventually ship RocksDB 11 / Cython 4 and break here unpredictably.
+        # python-rocksdb 2.x requires RocksDB >= 8 and Cython >= 3, so only
+        # Debian trixie (13) and newer ship compatible system packages (trixie
+        # has RocksDB 9.10 and Cython 3; bookworm ships RocksDB 7.8 and Cython
+        # 0.29, both too old). We test trixie (stable) only; sid (unstable) is a
+        # rolling target that will eventually ship RocksDB 11 / Cython 4 and
+        # break here unpredictably.
         dist: [trixie]
     steps:
       - uses: actions/checkout@v6

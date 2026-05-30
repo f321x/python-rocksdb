@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Cython bindings for the RocksDB C++ library. Published to PyPI as **`rocksdb-ng`**
 but imported as `rocksdb` (the plain `rocksdb` PyPI name belongs to the upstream
-project this is forked from). Supports RocksDB **9.x–10.x** and Python **3.11–3.14**.
+project this is forked from). Supports RocksDB **8.x–10.x** and Python **3.11–3.14**.
 This is a fork consolidating the abandoned `pyrocksdb` / `python-rocksdb` forks.
 
 ## Prerequisites
@@ -17,6 +17,15 @@ falls back to the `INCLUDE_PATH` / `LIBRARY_PATH` env vars, then to the
 compiler's default search paths. Only `-lrocksdb` is linked — a shared
 `librocksdb.so` pulls in its own codec deps (snappy/bz2/z/lz4/zstd). If you link
 a *static* `librocksdb.a`, you must re-add those codecs in `setup.py`.
+
+`setup.py` enforces the supported RocksDB range (`MIN_ROCKSDB`, currently 8.0):
+it detects the version via `pkg-config` / `<rocksdb/version.h>` and aborts early
+with a clear message on anything older (below the floor, headers like
+`<rocksdb/utilities/backup_engine.h>` are missing and the build would otherwise
+fail opaquely mid-compile). A newer-than-tested major only warns. The force-included
+`rocksdb/cpp/version_check.hpp` is a compile-time backstop for when the version
+can't be detected before compiling (RocksDB on the default search path); keep its
+floor in sync with `MIN_ROCKSDB`.
 
 ## Common commands
 

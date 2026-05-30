@@ -6,7 +6,7 @@ Installing
 With distro package and pypi
 ****************************
 
-This requires librocksdb-dev>=9 (RocksDB 9.x or 10.x)
+This requires librocksdb-dev>=8 (RocksDB 8.x, 9.x or 10.x)
 
 .. code-block:: bash
 

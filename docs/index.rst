@@ -11,7 +11,7 @@ Python bindings to the C++ interface of http://rocksdb.org/ using cython::
     db.put(b"a", b"b")
     print(db.get(b"a"))
 
-Tested with python 3.11-3.14 and RocksDB versions 9.x and 10.x.
+Tested with python 3.11-3.14 and RocksDB versions 8.x, 9.x and 10.x.
 
 .. toctree::
     :maxdepth: 2

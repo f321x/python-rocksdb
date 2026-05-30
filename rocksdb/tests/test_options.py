@@ -267,7 +267,9 @@ class TestOptions(unittest.TestCase):
                 ('manual_wal_flush', False, True),
                 ('atomic_flush', False, True),
                 ('avoid_unnecessary_blocking_io', False, True),
-                ('write_dbid_to_manifest', True, False),
+                # Default flipped False -> True across the supported RocksDB
+                # range (False in 8.x, True in 9.x+), so don't assert a value.
+                ('write_dbid_to_manifest', NOTNONE, False),
                 ('log_readahead_size', 0, 10),
                 ('best_efforts_recovery', False, True),
         ):
