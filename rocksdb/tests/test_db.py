@@ -284,6 +284,144 @@ class TestDB(TestHelper):
     def test_write_low_pri(self):
         self.db.put(b"a", b"1", low_pri=True)
 
+    # --- close() lifecycle ------------------------------------------------
+
+    def test_close_reopen(self):
+        # Data written before an explicit close() must survive reopening a
+        # fresh handle at the same path.
+        path = os.path.join(self.db_loc, "test")
+        self.db.put(b'persist', b'value')
+        self.db.close()
+
+        reopened = rocksdb.DB(path, rocksdb.Options(create_if_missing=False))
+        try:
+            self.assertEqual(b'value', reopened.get(b'persist'))
+        finally:
+            reopened.close()
+            del reopened
+            gc.collect()
+
+    def test_double_close(self):
+        # close() is idempotent -- the second call is a guarded no-op and must
+        # not raise or crash. (For TransactionDB, run via the inherited suite,
+        # this also guards against close() failing to reset the db pointer.)
+        self.db.close()
+        self.db.close()
+
+    def test_use_after_close_raises(self):
+        # Operating on a closed DB must raise cleanly rather than dereferencing
+        # a NULL handle and segfaulting.
+        self.db.close()
+        self.assertRaises(RuntimeError, self.db.put, b'k', b'v')
+        self.assertRaises(RuntimeError, self.db.get, b'k')
+
+    # --- live files / column-family metadata ------------------------------
+
+    def test_live_files_metadata(self):
+        for x in range(10000):
+            x = int_to_bytes(x)
+            self.db.put(x, x)
+        # No flush() is exposed; compact_range() forces a flush + compaction so
+        # the data lands in at least one live SST file.
+        self.db.compact_range()
+
+        meta = self.db.get_live_files_metadata()
+        self.assertIsInstance(meta, list)
+        self.assertGreaterEqual(len(meta), 1)
+
+        entry = meta[0]
+        self.assertEqual(
+            {'name', 'level', 'size', 'smallestkey', 'largestkey',
+             'smallest_seqno', 'largest_seqno'},
+            set(entry.keys()))
+        self.assertIsInstance(entry['name'], str)
+        self.assertIsInstance(entry['level'], int)
+        self.assertIsInstance(entry['size'], int)
+        self.assertGreater(entry['size'], 0)
+        self.assertIsInstance(entry['smallestkey'], bytes)
+        self.assertIsInstance(entry['largestkey'], bytes)
+        self.assertIsInstance(entry['smallest_seqno'], int)
+        self.assertIsInstance(entry['largest_seqno'], int)
+
+    def test_column_family_meta_data(self):
+        for x in range(10000):
+            x = int_to_bytes(x)
+            self.db.put(x, x)
+        self.db.compact_range()
+
+        meta = self.db.get_column_family_meta_data()
+        self.assertEqual({'size', 'file_count'}, set(meta.keys()))
+        self.assertIsInstance(meta['size'], int)
+        self.assertGreater(meta['size'], 0)
+        self.assertIsInstance(meta['file_count'], int)
+        self.assertGreaterEqual(meta['file_count'], 1)
+
+    # --- negative / error paths -------------------------------------------
+
+    def test_open_missing_db(self):
+        missing = os.path.join(self.db_loc, "does_not_exist")
+        # The concrete subclass (NotFound / RocksIOError) is RocksDB-version
+        # dependent, so assert against the common base.
+        self.assertRaises(
+            rocksdb.Error,
+            rocksdb.DB, missing, rocksdb.Options(create_if_missing=False))
+
+    def test_open_error_if_exists(self):
+        # Create-and-close a throwaway DB at a fresh path (so this is the
+        # error_if_exists check, not a file-lock error from self.db), then
+        # reopening it with error_if_exists=True must fail.
+        path = os.path.join(self.db_loc, "exists_test")
+        tmp = rocksdb.DB(path, rocksdb.Options(create_if_missing=True))
+        tmp.close()
+        del tmp
+        gc.collect()
+
+        self.assertRaises(
+            rocksdb.Error,
+            rocksdb.DB, path,
+            rocksdb.Options(create_if_missing=True, error_if_exists=True))
+
+    def test_put_non_bytes_key(self):
+        self.assertRaises(TypeError, self.db.put, u'not-bytes', b'v')
+        self.assertRaises(TypeError, self.db.put, 123, b'v')
+
+    def test_put_non_bytes_value(self):
+        self.assertRaises(TypeError, self.db.put, b'k', u'not-bytes')
+        self.assertRaises(TypeError, self.db.put, b'k', 123)
+
+    # --- read-only mode ----------------------------------------------------
+
+    def test_read_only_open(self):
+        path = os.path.join(self.db_loc, "test")
+        self.db.put(b'k', b'v')
+        self.db.close()
+
+        ro = rocksdb.DB(
+            path, rocksdb.Options(create_if_missing=False), read_only=True)
+        try:
+            self.assertEqual(b'v', ro.get(b'k'))
+            self.assertRaises(rocksdb.NotSupported, ro.put, b'k2', b'v2')
+        finally:
+            ro.close()
+            del ro
+            gc.collect()
+
+    # --- multi_get edge cases ---------------------------------------------
+
+    def test_multi_get_missing_key(self):
+        self.db.put(b'present', b'v')
+        ret = self.db.multi_get([b'present', b'absent'])
+        self.assertEqual({b'present': b'v', b'absent': None}, ret)
+
+    def test_multi_get_as_list(self):
+        self.db.put(b'a', b'va')
+        self.db.put(b'b', b'vb')
+        # as_dict=False returns a parallel list -- duplicates preserved, missing
+        # keys mapped to None -- unlike the dict form which de-dups keys.
+        ret = self.db.multi_get([b'a', b'b', b'a', b'missing'], as_dict=False)
+        self.assertEqual([b'va', b'vb', b'va', None], ret)
+
+
 class AssocCounter(rocksdb.interfaces.AssociativeMergeOperator):
     def merge(self, key, existing_value, value):
         if existing_value:
@@ -789,4 +927,109 @@ class TestDBColumnFamilies(TestHelper):
             self.db.put((self.cf_b, x), x)
 
         self.db.compact_range(column_family=self.cf_b)
+
+    # --- multi-column-family iterators ------------------------------------
+    #
+    # iterskeys/itersvalues/itersitems open one iterator per column family
+    # (via NewIterators). Each CF gets the same keys but distinct values so a
+    # wrong per-CF binding cannot hide behind matching data.
+
+    def _fill_two_cfs(self):
+        for k, v in ((b'1', b'a1'), (b'2', b'a2'), (b'3', b'a3')):
+            self.db.put((self.cf_a, k), v)
+        for k, v in ((b'1', b'b1'), (b'2', b'b2'), (b'3', b'b3')):
+            self.db.put((self.cf_b, k), v)
+
+    def test_iters_keys(self):
+        self._fill_two_cfs()
+
+        its = self.db.iterskeys([self.cf_a, self.cf_b])
+        self.assertEqual(2, len(its))
+        it_a, it_b = its
+        it_a.seek_to_first()
+        it_b.seek_to_first()
+        keys_a = list(it_a)
+        keys_b = list(it_b)
+
+        self.assertEqual(
+            [(self.cf_a, b'1'), (self.cf_a, b'2'), (self.cf_a, b'3')], keys_a)
+        self.assertEqual(
+            [(self.cf_b, b'1'), (self.cf_b, b'2'), (self.cf_b, b'3')], keys_b)
+
+        # A keys iterator yields (handle, key) 2-tuples whose second element is
+        # the raw key bytes. (When iterskeys was shadowed by a mis-named items
+        # iterator it yielded ((handle, key), value) instead, so element [1]
+        # was the inner tuple rather than bytes.)
+        first = keys_a[0]
+        self.assertIsInstance(first, tuple)
+        self.assertEqual(2, len(first))
+        self.assertEqual(self.cf_a, first[0])
+        self.assertIsInstance(first[1], bytes)
+
+    def test_iters_values(self):
+        self._fill_two_cfs()
+
+        its = self.db.itersvalues([self.cf_a, self.cf_b])
+        self.assertEqual(2, len(its))
+        it_a, it_b = its
+        it_a.seek_to_first()
+        it_b.seek_to_first()
+        # A values iterator yields bare value bytes (no column-family handle).
+        self.assertEqual([b'a1', b'a2', b'a3'], list(it_a))
+        self.assertEqual([b'b1', b'b2', b'b3'], list(it_b))
+
+    def test_iters_items(self):
+        self._fill_two_cfs()
+
+        # itersitems did not exist before the iterskeys/itersitems fix; calling
+        # it raised AttributeError.
+        its = self.db.itersitems([self.cf_a, self.cf_b])
+        self.assertEqual(2, len(its))
+        it_a, it_b = its
+        it_a.seek_to_first()
+        it_b.seek_to_first()
+        self.assertEqual(
+            [((self.cf_a, b'1'), b'a1'),
+             ((self.cf_a, b'2'), b'a2'),
+             ((self.cf_a, b'3'), b'a3')],
+            list(it_a))
+        self.assertEqual(
+            [((self.cf_b, b'1'), b'b1'),
+             ((self.cf_b, b'2'), b'b2'),
+             ((self.cf_b, b'3'), b'b3')],
+            list(it_b))
+
+    # --- drop_column_family ------------------------------------------------
+
+    def test_drop_column_family(self):
+        self.db.put((self.cf_b, b'k'), b'v')
+        self.assertEqual(b'v', self.db.get((self.cf_b, b'k')))
+        self.assertTrue(self.cf_b.is_valid)
+
+        self.db.drop_column_family(self.cf_b)
+
+        # The handle is invalidated and removed from the live listing.
+        self.assertFalse(self.cf_b.is_valid)
+        names = [h.name for h in self.db.column_families]
+        self.assertEqual([b'default', b'A'], names)
+
+        # Using the dropped handle raises -- the Python weakref guard in
+        # get_handle() fires before any RocksDB call.
+        self.assertRaises(ValueError, self.db.put, (self.cf_b, b'x'), b'y')
+        self.assertRaises(ValueError, self.db.get, (self.cf_b, b'k'))
+
+    # --- per-column-family metadata ---------------------------------------
+
+    def test_column_family_meta_data(self):
+        for x in range(10000):
+            x = int_to_bytes(x)
+            self.db.put((self.cf_a, x), x)
+        self.db.compact_range(column_family=self.cf_a)
+
+        meta = self.db.get_column_family_meta_data(self.cf_a)
+        self.assertEqual({'size', 'file_count'}, set(meta.keys()))
+        self.assertIsInstance(meta['size'], int)
+        self.assertGreater(meta['size'], 0)
+        self.assertIsInstance(meta['file_count'], int)
+        self.assertGreaterEqual(meta['file_count'], 1)
 
