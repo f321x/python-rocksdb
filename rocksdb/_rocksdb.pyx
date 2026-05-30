@@ -1970,6 +1970,12 @@ cdef class DB(object):
             return
         self.close()
 
+    cdef _ensure_open(self):
+        # Operations dereference self.wrapped_db; after close() it is NULL, so
+        # guard here to raise instead of segfaulting on a closed DB.
+        if self.wrapped_db == NULL:
+            raise RuntimeError("operation on a closed DB")
+
     @property
     def column_families(self):
         return [handle.weakref for handle in self.cf_handles]
@@ -1980,6 +1986,7 @@ cdef class DB(object):
                 return handle.weakref
 
     def put(self, key, value, sync=False, disable_wal=False, ignore_missing_column_families=False, no_slowdown=False, low_pri=False):
+        self._ensure_open()
         cdef Status st
         cdef options.WriteOptions opts
         opts.sync = sync
@@ -2004,6 +2011,7 @@ cdef class DB(object):
         check_status(st)
 
     def delete(self, key, sync=False, disable_wal=False, ignore_missing_column_families=False, no_slowdown=False, low_pri=False):
+        self._ensure_open()
         cdef Status st
         cdef options.WriteOptions opts
         opts.sync = sync
@@ -2027,6 +2035,7 @@ cdef class DB(object):
         check_status(st)
 
     def merge(self, key, value, sync=False, disable_wal=False, ignore_missing_column_families=False, no_slowdown=False, low_pri=False):
+        self._ensure_open()
         cdef Status st
         cdef options.WriteOptions opts
         opts.sync = sync
@@ -2051,6 +2060,7 @@ cdef class DB(object):
         check_status(st)
 
     def write(self, WriteBatch batch, sync=False, disable_wal=False, ignore_missing_column_families=False, no_slowdown=False, low_pri=False):
+        self._ensure_open()
         cdef Status st
         cdef options.WriteOptions opts
         opts.sync = sync
@@ -2064,6 +2074,7 @@ cdef class DB(object):
         check_status(st)
 
     def get(self, key, *args, **kwargs):
+        self._ensure_open()
         cdef string res
         cdef Status st
         cdef options.ReadOptions opts
@@ -2091,6 +2102,7 @@ cdef class DB(object):
             check_status(st)
 
     def multi_get(self, keys, *args, as_dict=True, **kwargs):
+        self._ensure_open()
         if as_dict:
             # Remove duplicate keys
             keys = list(dict.fromkeys(keys))
@@ -2145,6 +2157,7 @@ cdef class DB(object):
             return ret_list
 
     def key_may_exist(self, key, fetch=False, *args, **kwargs):
+        self._ensure_open()
         cdef string value
         cdef cpp_bool value_found
         cdef cpp_bool exists
@@ -2188,6 +2201,7 @@ cdef class DB(object):
             return (exists, None)
 
     def iterkeys(self, ColumnFamilyHandle column_family=None, *args, **kwargs):
+        self._ensure_open()
         cdef options.ReadOptions opts
         cdef KeysIterator it
         cdef db.ColumnFamilyHandle* cf_handle = self.wrapped_db.DefaultColumnFamily()
@@ -2202,6 +2216,7 @@ cdef class DB(object):
         return it
 
     def itervalues(self, ColumnFamilyHandle column_family=None, *args, **kwargs):
+        self._ensure_open()
         cdef options.ReadOptions opts
         cdef ValuesIterator it
         cdef db.ColumnFamilyHandle* cf_handle = self.wrapped_db.DefaultColumnFamily()
@@ -2217,6 +2232,7 @@ cdef class DB(object):
         return it
 
     def iteritems(self, ColumnFamilyHandle column_family=None, *args, **kwargs):
+        self._ensure_open()
         cdef options.ReadOptions opts
         cdef ItemsIterator it
         cdef db.ColumnFamilyHandle* cf_handle = self.wrapped_db.DefaultColumnFamily()
@@ -2231,6 +2247,7 @@ cdef class DB(object):
         return it
 
     def iterskeys(self, column_families, *args, **kwargs):
+        self._ensure_open()
         cdef vector[db.Iterator*] iters
         iters.resize(len(column_families))
         cdef options.ReadOptions opts
@@ -2256,6 +2273,7 @@ cdef class DB(object):
         return ret
 
     def itersvalues(self, column_families, *args, **kwargs):
+        self._ensure_open()
         cdef vector[db.Iterator*] iters
         iters.resize(len(column_families))
         cdef options.ReadOptions opts
@@ -2279,7 +2297,8 @@ cdef class DB(object):
             ret.append(it)
         return ret
 
-    def iterskeys(self, column_families, *args, **kwargs):
+    def itersitems(self, column_families, *args, **kwargs):
+        self._ensure_open()
         cdef vector[db.Iterator*] iters
         iters.resize(len(column_families))
         cdef options.ReadOptions opts
@@ -2306,9 +2325,11 @@ cdef class DB(object):
         return ret
 
     def snapshot(self):
+        self._ensure_open()
         return Snapshot(self)
 
     def get_property(self, prop, ColumnFamilyHandle column_family=None):
+        self._ensure_open()
         cdef string value
         cdef Slice c_prop = bytes_to_slice(prop)
         cdef cpp_bool ret = False
@@ -2325,6 +2346,7 @@ cdef class DB(object):
             return None
 
     def get_live_files_metadata(self):
+        self._ensure_open()
         cdef vector[db.LiveFileMetaData] metadata
 
         with nogil:
@@ -2346,6 +2368,7 @@ cdef class DB(object):
         return ret
 
     def get_column_family_meta_data(self, ColumnFamilyHandle column_family=None):
+        self._ensure_open()
         cdef db.ColumnFamilyMetaData metadata
 
         cdef db.ColumnFamilyHandle* cf_handle = self.wrapped_db.DefaultColumnFamily()
@@ -2361,6 +2384,7 @@ cdef class DB(object):
         }
 
     def compact_range(self, begin=None, end=None, ColumnFamilyHandle column_family=None, **py_options):
+        self._ensure_open()
         cdef options.CompactRangeOptions c_options
 
         c_options.change_level = py_options.get('change_level', False)
@@ -2454,6 +2478,7 @@ cdef class DB(object):
             return self.opts
 
     def create_column_family(self, bytes name, ColumnFamilyOptions copts):
+        self._ensure_open()
         cdef db.ColumnFamilyHandle* cf_handle
         cdef Status st
         cdef string c_name = name
@@ -2477,6 +2502,7 @@ cdef class DB(object):
         return handle.weakref
 
     def drop_column_family(self, ColumnFamilyHandle weak_handle not None):
+        self._ensure_open()
         cdef db.ColumnFamilyHandle* cf_handle
         cdef ColumnFamilyOptions copts
         cdef Status st
@@ -2566,6 +2592,7 @@ cdef class TransactionDB(DB):
             del self.cf_options[:]
             with nogil:
                 st = (<transaction_db.TransactionDB *>(self.wrapped_db)).Close()
+                self.wrapped_db = NULL
             if self.opts is not None:
                 self.opts.in_use = False
             if self.tdb_opts is not None:
