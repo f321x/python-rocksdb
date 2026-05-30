@@ -1,8 +1,32 @@
 Changelog
 *********
 
-Unreleased
-----------
+Version 2.1
+-----------
+
+Bug-fix release that also lowers the minimum supported RocksDB to 8.x and makes
+the build fail fast on an unsupported RocksDB.
+
+Bug fixes
+~~~~~~~~~
+
+* **Fixed** ``rocksdb.DB.iterskeys`` **on column families.** A duplicate method
+  definition shadowed the real one, so calling ``iterskeys`` with a list of
+  column-family handles returned *items* iterators (yielding ``(key, value)``
+  pairs) instead of keys iterators. It now correctly returns keys iterators.
+* **Added** ``rocksdb.DB.itersitems``, the multi-column-family items iterator
+  that the shadowed definition above was meant to provide; it was previously
+  unreachable (raised ``AttributeError``).
+* **Operating on a closed database now raises** ``RuntimeError`` **instead of
+  crashing.** Calling ``put`` / ``get`` / ``delete`` / iterator / etc. after
+  ``rocksdb.DB.close()`` previously dereferenced a NULL pointer and segfaulted;
+  it now raises a clean exception, and ``close()`` is safe to call more than once.
+* **Fixed a double-close in** ``rocksdb.TransactionDB``. ``close()`` did not reset
+  its internal handle, so the underlying ``TransactionDB::Close()`` ran twice
+  (the explicit ``close()`` plus the one in ``__dealloc__``), risking a crash.
+
+RocksDB version support
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * **Lowered the minimum supported RocksDB to 8.x** (from 9). The binding builds
   and passes the test suite against RocksDB 8.9, so the supported/tested range is
