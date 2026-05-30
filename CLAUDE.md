@@ -18,14 +18,16 @@ compiler's default search paths. Only `-lrocksdb` is linked — a shared
 `librocksdb.so` pulls in its own codec deps (snappy/bz2/z/lz4/zstd). If you link
 a *static* `librocksdb.a`, you must re-add those codecs in `setup.py`.
 
-`setup.py` enforces the supported RocksDB range (`MIN_ROCKSDB`, currently 8.0):
-it detects the version via `pkg-config` / `<rocksdb/version.h>` and aborts early
-with a clear message on anything older (below the floor, headers like
+`setup.py` enforces the supported RocksDB range (`MIN_ROCKSDB` /
+`MAX_TESTED_ROCKSDB_MAJOR`, currently 8.0–10.x): it detects the version via
+`pkg-config` / `<rocksdb/version.h>` and aborts early with a clear message on
+anything outside the range — both anything older (below the floor, headers like
 `<rocksdb/utilities/backup_engine.h>` are missing and the build would otherwise
-fail opaquely mid-compile). A newer-than-tested major only warns. The force-included
-`rocksdb/cpp/version_check.hpp` is a compile-time backstop for when the version
-can't be detected before compiling (RocksDB on the default search path); keep its
-floor in sync with `MIN_ROCKSDB`.
+fail opaquely mid-compile) and a newer-than-tested major (unverified, and may
+rely on changed APIs). The force-included `rocksdb/cpp/version_check.hpp` is a
+compile-time backstop for when the version can't be detected before compiling
+(RocksDB on the default search path); keep its bounds in sync with `MIN_ROCKSDB` /
+`MAX_TESTED_ROCKSDB_MAJOR`.
 
 ## Common commands
 

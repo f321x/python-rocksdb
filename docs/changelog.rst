@@ -1,6 +1,17 @@
 Changelog
 *********
 
+Unreleased
+----------
+
+* **The build now also fails fast on a RocksDB newer than the tested range.**
+  Previously an *older*-than-supported RocksDB aborted the build but a
+  newer-than-tested major merely warned. Both ``setup.py`` and the
+  ``rocksdb/cpp/version_check.hpp`` compile-time backstop now refuse a major
+  newer than the tested range (currently 10.x) as well, since building against
+  an untested RocksDB is risky. The range is set by ``MIN_ROCKSDB`` /
+  ``MAX_TESTED_ROCKSDB_MAJOR`` in ``setup.py``.
+
 Version 2.1
 -----------
 

@@ -14,8 +14,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Supported RocksDB C++ API range. Below MIN_ROCKSDB the headers lack APIs this
 # binding needs (e.g. <rocksdb/utilities/backup_engine.h>, added in 7.0) and the
 # build explodes mid-compile with an opaque error; at or above it the binding is
-# tested through the 10.x series. Newer-than-tested majors usually work but are
-# unverified, so we only warn. Keep MIN in sync with rocksdb/cpp/version_check.hpp.
+# tested through the 10.x series. A newer-than-tested major is unverified and may
+# rely on changed C++ APIs, so it is refused rather than silently building an
+# untested module. Keep both bounds in sync with rocksdb/cpp/version_check.hpp.
 MIN_ROCKSDB = (8, 0, 0)
 MAX_TESTED_ROCKSDB_MAJOR = 10
 
@@ -78,9 +79,9 @@ def detect_rocksdb_version(include_dirs):
 
 
 def enforce_rocksdb_version(version):
-    """Abort the build with a clear message on an unsupported RocksDB, or warn
-    on an untested-but-newer one. A None version is left to the compile-time
-    guard in rocksdb/cpp/version_check.hpp."""
+    """Abort the build with a clear message on an unsupported RocksDB -- one
+    older than MIN_ROCKSDB or newer than the tested major. A None version is
+    left to the compile-time guard in rocksdb/cpp/version_check.hpp."""
     if version is None:
         return
     found = '.'.join(map(str, version))
@@ -95,11 +96,14 @@ def enforce_rocksdb_version(version):
             % (minimum, found, found, supported_range)
         )
     if version[0] > MAX_TESTED_ROCKSDB_MAJOR:
-        sys.stderr.write(
-            'WARNING: building rocksdb-ng against RocksDB %s, which is newer '
-            'than the tested range (%s). It will probably work, but is '
-            'unverified -- please report success or failure.\n'
-            % (found, supported_range)
+        sys.exit(
+            'ERROR: rocksdb-ng supports RocksDB up to the %d.x series, but found '
+            '%s. RocksDB %s is newer than the tested range (%s) and may have '
+            'changed or removed C++ APIs this binding relies on, so the build is '
+            'refused rather than producing an untested, possibly broken module. '
+            'Install librocksdb-dev %s, or point INCLUDE_PATH/LIBRARY_PATH at a '
+            'supported RocksDB.'
+            % (MAX_TESTED_ROCKSDB_MAJOR, found, found, supported_range, supported_range)
         )
 
 
