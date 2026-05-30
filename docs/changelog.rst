@@ -1,8 +1,11 @@
 Changelog
 *********
 
-Unreleased
-----------
+Version 2.2
+-----------
+
+Build-hardening release: the build now refuses a RocksDB *newer* than the tested
+range as well, not only an older one.
 
 * **The build now also fails fast on a RocksDB newer than the tested range.**
   Previously an *older*-than-supported RocksDB aborted the build but a
