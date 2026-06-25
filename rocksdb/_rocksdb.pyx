@@ -1826,6 +1826,10 @@ cdef class DB(object):
     cdef vector[db.ColumnFamilyDescriptor] column_family_descriptors
     cdef vector[db.ColumnFamilyHandle*] column_family_handles
     cdef string db_path
+    # WeakSets of live iterators/snapshots so close() can release the C++
+    # resources they hold BEFORE the DB is closed (see _release_children).
+    cdef object _iterators
+    cdef object _snapshots
 
     def __cinit__(self, db_name, Options opts, dict column_families=None,
                   read_only=False, *args, **kwargs):
@@ -1835,6 +1839,8 @@ cdef class DB(object):
         self.opts = None
         self.cf_handles = []
         self.cf_options = []
+        self._iterators = weakref.WeakSet()
+        self._snapshots = weakref.WeakSet()
 
         if opts.in_use:
             raise InvalidArgument(
@@ -1941,6 +1947,29 @@ cdef class DB(object):
         self.opts = opts
         self.opts.in_use = True
 
+    cdef _register_iterator(self, it):
+        self._iterators.add(it)
+
+    cdef _register_snapshot(self, snap):
+        self._snapshots.add(snap)
+
+    cdef _release_children(self):
+        # Deterministically free every outstanding iterator and snapshot BEFORE
+        # the underlying DB is closed. An open rocksdb::Iterator pins a column
+        # family SuperVersion and a live snapshot must be released through the
+        # DB; if either survives into DB::Close() rocksdb aborts (the
+        # ColumnFamilySet::~ColumnFamilySet 'last_ref' assertion) or we later
+        # dereference an already-closed DB. We must not rely on Python
+        # finalization order, which is not guaranteed at GC/interpreter shutdown.
+        if self._iterators is not None:
+            for it in list(self._iterators):
+                it._force_close()
+            self._iterators.clear()
+        if self._snapshots is not None:
+            for snap in list(self._snapshots):
+                snap._force_close()
+            self._snapshots.clear()
+
     def close(self, safe=True):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
@@ -1949,11 +1978,15 @@ cdef class DB(object):
             # We need stop backround compactions
             with nogil:
                 db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
+            # Free every outstanding iterator/snapshot before closing so rocksdb
+            # doesn't assert on a still-referenced column family.
+            self._release_children()
             # We have to make sure we delete the handles so rocksdb doesn't
-            # assert when we delete the db
+            # assert when we close the db
             del self.cf_handles[:]
-            for cfhandle in self.column_family_handles:
-                cfhandle = NULL
+            # cf_handles held the only strong refs to the wrapped handles (now
+            # freed); drop the dangling raw pointers we cached too.
+            self.column_family_handles.clear()
             for copts in self.cf_options:
                 if copts:
                     copts.in_use = False
@@ -1963,12 +1996,18 @@ cdef class DB(object):
                 self.wrapped_db = NULL
             if self.opts is not None:
                 self.opts.in_use = False
+            check_status(st)
 
     def __dealloc__(self):
         if type(self) != DB:
             self.wrapped_db = NULL
             return
-        self.close()
+        # close() may raise (e.g. check_status); never propagate out of a
+        # destructor, especially during interpreter shutdown.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     cdef _ensure_open(self):
         # Operations dereference self.wrapped_db; after close() it is NULL, so
@@ -2583,9 +2622,11 @@ cdef class TransactionDB(DB):
                 db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
             # We have to make sure we delete the handles so rocksdb doesn't
             # assert when we delete the db
+            # Free every outstanding iterator/snapshot before closing so rocksdb
+            # doesn't assert on a still-referenced column family.
+            self._release_children()
             del self.cf_handles[:]
-            for cfhandle in self.column_family_handles:
-                cfhandle = NULL
+            self.column_family_handles.clear()
             for copts in self.cf_options:
                 if copts:
                     copts.in_use = False
@@ -2597,25 +2638,40 @@ cdef class TransactionDB(DB):
                 self.opts.in_use = False
             if self.tdb_opts is not None:
                 self.tdb_opts.in_use = False
+            check_status(st)
 
     def __dealloc__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
 @cython.no_gc_clear
 @cython.internal
 cdef class Snapshot(object):
     cdef const snapshot.Snapshot* ptr
     cdef DB db
+    cdef object __weakref__
 
     def __cinit__(self, DB db):
         self.db = db
         self.ptr = NULL
         with nogil: self.ptr = db.wrapped_db.GetSnapshot()
+        db._register_snapshot(self)
 
     def __dealloc__(self):
-        if not self.ptr == NULL:
+        self._force_close()
+
+    def _force_close(self):
+        # Release the snapshot while the DB is still open. Idempotent; if the DB
+        # has already been closed (wrapped_db == NULL) there is nothing to
+        # release and dereferencing it would segfault, so we just drop our ref.
+        cdef db.DB* wrapped = NULL
+        if self.ptr != NULL and self.db is not None and self.db.wrapped_db != NULL:
+            wrapped = self.db.wrapped_db
             with nogil:
-                self.db.wrapped_db.ReleaseSnapshot(self.ptr)
+                wrapped.ReleaseSnapshot(self.ptr)
+        self.ptr = NULL
 
 
 @cython.internal
@@ -2623,20 +2679,37 @@ cdef class BaseIterator(object):
     cdef iterator.Iterator* ptr
     cdef DB db
     cdef ColumnFamilyHandle handle
+    cdef object __weakref__
 
     def __cinit__(self, DB db, ColumnFamilyHandle handle = None):
         self.db = db
         self.ptr = NULL
         self.handle = handle
+        if db is not None:
+            db._register_iterator(self)
 
     def __dealloc__(self):
-        if not self.ptr == NULL:
+        self._force_close()
+
+    def _force_close(self):
+        # Delete the underlying rocksdb::Iterator and forget it. Idempotent, and
+        # called from DB.close() (before DB::Close()) so the iterator stops
+        # pinning its column family's SuperVersion in time to avoid the
+        # ColumnFamilySet 'last_ref' assertion.
+        if self.ptr != NULL:
             del self.ptr
+            self.ptr = NULL
+
+    cdef _ensure_valid(self):
+        if self.ptr == NULL:
+            raise RuntimeError(
+                "Iterator is no longer valid (its DB has been closed)")
 
     def __iter__(self):
         return self
 
     def __next__(self):
+        self._ensure_valid()
         if not self.ptr.Valid():
             raise StopIteration()
 
@@ -2647,6 +2720,7 @@ cdef class BaseIterator(object):
         return ret
 
     def get(self):
+        self._ensure_valid()
         cdef object ret = self.get_ob()
         return ret
 
@@ -2654,22 +2728,26 @@ cdef class BaseIterator(object):
         return ReversedIterator(self)
 
     cpdef seek_to_first(self):
+        self._ensure_valid()
         with nogil:
             self.ptr.SeekToFirst()
         check_status(self.ptr.status())
 
     cpdef seek_to_last(self):
+        self._ensure_valid()
         with nogil:
             self.ptr.SeekToLast()
         check_status(self.ptr.status())
 
     cpdef seek(self, key):
+        self._ensure_valid()
         cdef Slice c_key = bytes_to_slice(key)
         with nogil:
             self.ptr.Seek(c_key)
         check_status(self.ptr.status())
 
     cpdef seek_for_prev(self, key):
+        self._ensure_valid()
         cdef Slice c_key = bytes_to_slice(key)
         with nogil:
             self.ptr.SeekForPrev(c_key)
