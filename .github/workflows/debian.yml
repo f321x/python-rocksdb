@@ -21,12 +21,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # python-rocksdb 2.x requires RocksDB >= 8 and Cython >= 3, so only
-        # Debian trixie (13) and newer ship compatible system packages (trixie
-        # has RocksDB 9.10 and Cython 3; bookworm ships RocksDB 7.8 and Cython
-        # 0.29, both too old). We test trixie (stable) only; sid (unstable) is a
-        # rolling target that will eventually ship RocksDB 11 / Cython 4 and
-        # break here unpredictably.
+        # This leg exercises the build against a *distro-packaged* librocksdb-dev
+        # (the `apt install librocksdb-dev` + `pip install` path most users take),
+        # as opposed to build.yml which compiles RocksDB from source. It needs a
+        # distro shipping RocksDB >= 8, i.e. Debian trixie (13) or newer (trixie
+        # ships RocksDB 9.10; bookworm's 7.8 is too old). We pin trixie (stable)
+        # only; sid (unstable) is a rolling target that will eventually ship an
+        # incompatible RocksDB and break here unpredictably.
         dist: [trixie]
     steps:
       - uses: actions/checkout@v6
@@ -36,26 +37,25 @@ jobs:
         # by hand (and hence their development packages needed here).
         run: |
           apt-get update
-          # With --no-build-isolation (below) pip does NOT install the build
-          # backend, so setuptools/wheel must already be present from apt.
+          # The build backend (Cython/setuptools/wheel/pkgconfig) is pulled from
+          # PyPI by pip's build isolation, so only the non-Python toolchain and
+          # the distro RocksDB this leg is meant to exercise are needed from apt.
+          # python3-venv lets pip create its isolated build env; pkg-config (the
+          # binary) is what setup.py shells out to in order to locate rocksdb.pc
+          # from librocksdb-dev.
           apt-get install --no-install-recommends -y \
-              build-essential librocksdb-dev cython3 python3-pkgconfig \
-              python3-dev python3-pip python3-pytest \
-              python3-setuptools python3-wheel \
+              build-essential librocksdb-dev pkg-config \
+              python3-dev python3-pip python3-venv \
               libsnappy-dev libbz2-dev liblz4-dev libz-dev
 
       - name: Build pyrocksdb
-        # TODO(dato): consider using pypa/build --no-isolaiton, to
-        # build the package using a tool specifically designed for
-        # that, rather than trusting it to a tool that does a lot
-        # more (pip).
         run: |
           # Debian's system Python is PEP 668 "externally managed". This is a
-          # throwaway CI container, so install straight into it; the only sane
-          # alternative (a venv) would lose access to the apt-provided cython3 /
-          # pytest the job is specifically meant to exercise.
-          python3 -m pip install --break-system-packages --no-build-isolation -v '.[test]'
+          # throwaway CI container, so install straight into it (--break-system-
+          # packages); build isolation still provisions the pinned modern Cython
+          # (>=3.2.5) from PyPI into an ephemeral env to build the extension.
+          python3 -m pip install --break-system-packages -v '.[test]'
 
       - name: Run tests
         run: |
-          pytest-3 --pyargs rocksdb
+          python3 -m pytest --pyargs rocksdb

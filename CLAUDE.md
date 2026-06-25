@@ -108,13 +108,14 @@ Three layers cooperate:
 - **Compiles as C++20** (`-std=c++20` in `setup.py`) — required by RocksDB 10.x
   headers (defaulted `operator==`, `using enum`).
 
-- **Must keep compiling under Cython 3.0.11**, even though `pyproject.toml` pins
-  `Cython>=3.2.5`. The Debian `trixie` CI job (`.github/workflows/debian.yml`)
-  builds `--no-build-isolation` against the system `cython3` (3.0.11), which has
-  weaker C++ overload resolution. Concretely: **do not pass a Python `bytes`
-  straight into a `std::string` method** (e.g. `.assign(...)`) in the `.pyx`
-  callbacks — wrap it through the `bytes_to_string(...)` helper. It builds fine
-  locally / on the main matrix but breaks only on the trixie leg.
+- **Requires Cython `>=3.2.5,<4`** (`pyproject.toml` build-system requires). The
+  old constraint to *also* stay compilable under Debian trixie's system Cython
+  3.0.11 has been dropped — the project is not a Debian-packaging target and the
+  `debian.yml` CI job now builds with pip's build isolation (a modern Cython from
+  PyPI). You are therefore free to use Cython 3.1+/3.2+ primitives (e.g.
+  `cython.pymutex`, `cython.critical_section`, the `freethreading_compatible`
+  directive). The existing `bytes_to_string(...)` calls in the `.pyx` callbacks
+  are still correct and need not be undone.
 
 - **`rocksdb-ng` ships the same top-level `rocksdb` import package** as the
   upstream `rocksdb` distribution, so the two cannot be co-installed. Reflect
@@ -124,7 +125,9 @@ Three layers cooperate:
 
 - `build.yml` — builds RocksDB 9.10 & 10.10 from source (cached), then builds &
   tests the binding across Python 3.11–3.14.
-- `debian.yml` — the Cython-3.0.11 / system-package compatibility gate (trixie).
+- `debian.yml` — builds & tests against Debian trixie's distro-packaged
+  `librocksdb-dev` (the `apt install librocksdb-dev` + `pip install` path), using
+  a modern isolated Cython from PyPI.
 - `docs.yml` — builds the Sphinx docs (`-W`) and deploys to GitHub Pages from `main`.
 - `sdist.yml` — verifies the reproducible sdist is byte-identical under Docker and
   rootless Podman. **CI never publishes**; releases are uploaded manually
