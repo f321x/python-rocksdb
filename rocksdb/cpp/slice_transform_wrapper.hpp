@@ -66,6 +66,10 @@ namespace py_rocks {
                 pyrocks_decref_context(this->ctx);
             }
 
+            // Owns a Python reference; forbid copying (held only by shared_ptr).
+            SliceTransformWrapper(const SliceTransformWrapper&) = delete;
+            SliceTransformWrapper& operator=(const SliceTransformWrapper&) = delete;
+
             virtual const char* Name() const {
                 return this->name.c_str();
             }

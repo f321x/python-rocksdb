@@ -56,6 +56,12 @@ namespace py_rocks {
                 pyrocks_decref_context(this->compare_context);
             }
 
+            // Owns a Python reference; forbid copying so an accidental
+            // value-copy cannot double-decref. RocksDB only ever holds this by
+            // pointer.
+            ComparatorWrapper(const ComparatorWrapper&) = delete;
+            ComparatorWrapper& operator=(const ComparatorWrapper&) = delete;
+
             virtual int Compare(const Slice& a, const Slice& b) const {
                 string error_msg;
                 int val;

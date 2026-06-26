@@ -51,3 +51,16 @@ class TestTransactionDB(TestDB):
             rocksdb.TransactionDB(os.path.join(self.db_loc, "test2"),
                                   opts,
                                   tdb_opts=self.db.transaction_options)
+
+    def test_failed_transaction_db_leaves_opts_reusable(self):
+        # Regression: when TransactionDB construction fails because tdb_opts is
+        # already in use, the fresh `opts` it was given never backed a live DB
+        # and must be left unclaimed so the caller can reuse it.
+        opts = rocksdb.Options(create_if_missing=True)
+        with self.assertRaises(rocksdb.InvalidArgument):
+            rocksdb.TransactionDB(os.path.join(self.db_loc, "test2"),
+                                  opts,
+                                  tdb_opts=self.db.transaction_options)
+        # opts is reusable: this must NOT raise "already used by another DB".
+        db2 = rocksdb.DB(os.path.join(self.db_loc, "test3"), opts)
+        db2.close()

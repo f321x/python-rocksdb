@@ -52,6 +52,10 @@ namespace py_rocks {
                 pyrocks_decref_context(this->merge_context);
             }
 
+            // Owns a Python reference; forbid copying (held only by shared_ptr).
+            AssociativeMergeOperatorWrapper(const AssociativeMergeOperatorWrapper&) = delete;
+            AssociativeMergeOperatorWrapper& operator=(const AssociativeMergeOperatorWrapper&) = delete;
+
             virtual bool Merge(
                 const Slice& key,
                 const Slice* existing_value,
@@ -118,6 +122,10 @@ namespace py_rocks {
                 pyrocks_decref_context(this->full_merge_context);
                 pyrocks_decref_context(this->partial_merge_context);
             }
+
+            // Owns Python references; forbid copying (held only by shared_ptr).
+            MergeOperatorWrapper(const MergeOperatorWrapper&) = delete;
+            MergeOperatorWrapper& operator=(const MergeOperatorWrapper&) = delete;
 
             virtual bool FullMerge(
                 const Slice& key,

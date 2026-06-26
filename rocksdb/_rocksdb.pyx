@@ -62,6 +62,7 @@ from .errors import MergeInProgress
 from .errors import Incomplete
 
 import weakref
+import threading
 
 ctypedef const filter_policy.FilterPolicy ConstFilterPolicy
 
@@ -1862,11 +1863,19 @@ cdef class DB(object):
     # Per-DB lifecycle lock. Guards close()/__dealloc__ self-races, the
     # column-family list read-modify-writes, and snapshot/iterator teardown
     # against a concurrent close() (e.g. a GC-driven __dealloc__ on another
-    # thread). It is a pymutex (not a critical section) because it must be held
-    # across the `with nogil:` C++ calls; a critical section is released by a
-    # nogil block. The data path (get/put/delete/write/iterator creation) is
-    # intentionally NOT guarded by it. Non-reentrant: see the _locked helpers.
-    cdef cython.pymutex _lock
+    # thread). The data path (get/put/delete/write/iterator creation) is
+    # intentionally NOT guarded by it.
+    #
+    # It is a threading.RLock for two reasons: (1) it must be holdable across the
+    # `with nogil:` C++ calls below (a cython.critical_section is released by a
+    # nogil block, so it could not); (2) it must be REENTRANT. A garbage
+    # collection triggered by an allocation inside a locked region can finalize a
+    # Snapshot/iterator of this same DB on this same thread, whose __dealloc__
+    # re-enters the lock through _force_close — a non-reentrant lock would
+    # self-deadlock there. close() additionally performs the *blocking* RocksDB
+    # drain (CancelAllBackgroundWork/Close) OUTSIDE the lock so a background
+    # thread's finalizer cannot deadlock against it either.
+    cdef object _lock
 
     def __cinit__(self, db_name, Options opts, dict column_families=None,
                   read_only=False, *args, **kwargs):
@@ -1878,6 +1887,7 @@ cdef class DB(object):
         self.cf_options = []
         self._iterators = weakref.WeakSet()
         self._snapshots = weakref.WeakSet()
+        self._lock = threading.RLock()
 
         # Atomically claim the Options object up front so two threads cannot
         # both attach the same mutable Options to a DB. The claim is released by
@@ -2013,7 +2023,7 @@ cdef class DB(object):
     cdef _register_snapshot(self, snap):
         self._snapshots.add(snap)
 
-    cdef list _release_children(self):
+    cdef _release_children(self):
         # Deterministically free every outstanding iterator and snapshot BEFORE
         # the underlying DB is closed. An open rocksdb::Iterator pins a column
         # family SuperVersion and a live snapshot must be released through the
@@ -2023,53 +2033,39 @@ cdef class DB(object):
         # finalization order, which is not guaranteed at GC/interpreter shutdown.
         #
         # Called only from close(), which already holds self._lock, so we invoke
-        # the _locked workers directly: taking the lock again here would deadlock
-        # (pymutex is non-reentrant). The list() materialises strong refs so the
-        # children cannot be GC'd from under us mid-iteration.
-        #
-        # Returns those strong refs so close() can keep them alive until AFTER it
-        # releases self._lock. A child's __dealloc__ goes through the *public*
-        # _force_close, which re-acquires self._lock; if a child's last reference
-        # were dropped while we still hold the lock it would finalize here and
-        # self-deadlock. Freeing them after the lock is released avoids that.
+        # the _locked workers directly to avoid a needless re-acquire. The
+        # _force_close_locked workers are idempotent, so even if a child finalizes
+        # here (the lock is reentrant) it is harmless. The list() materialises
+        # strong refs so the WeakSets are not mutated under iteration.
         cdef BaseIterator it
         cdef Snapshot snap
-        cdef list kept = []
-        cdef list current
         if self._iterators is not None:
-            current = list(self._iterators)
-            for it in current:
+            for it in list(self._iterators):
                 it._force_close_locked()
-            kept.extend(current)
             self._iterators.clear()
         if self._snapshots is not None:
-            current = list(self._snapshots)
-            for snap in current:
+            for snap in list(self._snapshots):
                 snap._force_close_locked()
-            kept.extend(current)
             self._snapshots.clear()
-        return kept
 
     def close(self, safe=True):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
         cdef Status st
         cdef db.DB* wrapped
-        cdef list children = None
-        # Hold the lifecycle lock across the whole teardown so a concurrent
-        # close() / GC __dealloc__ / snapshot release cannot double-close or
-        # use-after-free. pymutex can be held across the `with nogil:` blocks
-        # below. check_status() may raise; the `with` releases the lock anyway.
+        # Phase 1, under the lock: release children and detach all Python-side
+        # state, then NULL wrapped_db. This is the part that must be serialized
+        # against a concurrent close() / GC __dealloc__ / snapshot release. The
+        # children are released while wrapped_db is still valid (their
+        # _force_close_locked guards on it). The lock is reentrant, so a child
+        # finalized by GC on THIS thread inside here does not self-deadlock.
         with self._lock:
             if self.wrapped_db == NULL:
                 return
-            # We need stop backround compactions
-            with nogil:
-                db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
+            wrapped = self.wrapped_db
             # Free every outstanding iterator/snapshot before closing so rocksdb
-            # doesn't assert on a still-referenced column family. Keep the
-            # returned strong refs alive until after the lock is released.
-            children = self._release_children()
+            # doesn't assert on a still-referenced column family.
+            self._release_children()
             # We have to make sure we delete the handles so rocksdb doesn't
             # assert when we close the db
             del self.cf_handles[:]
@@ -2080,15 +2076,21 @@ cdef class DB(object):
                 if copts:
                     copts.in_use = False
             del self.cf_options[:]
-            # Null the pointer under the lock BEFORE Close() so any other thread
-            # that takes the lock next sees a closed DB. Close() runs on a local.
-            wrapped = self.wrapped_db
-            self.wrapped_db = NULL
-            with nogil:
-                st = wrapped.Close()
             if self.opts is not None:
                 self.opts.in_use = False
-            check_status(st)
+            # Mark the DB closed under the lock: any later close()/finalizer that
+            # takes the lock now sees NULL and becomes a no-op, so none of them
+            # touches `wrapped` while we drain and close it below.
+            self.wrapped_db = NULL
+        # Phase 2, WITHOUT the lock: the blocking RocksDB calls. Holding the lock
+        # here would deadlock against a background compaction/flush thread that,
+        # mid user-callback, GC-finalizes a Snapshot of this DB and blocks trying
+        # to take the lock we would still be holding while waiting for that very
+        # thread to drain.
+        with nogil:
+            db.CancelAllBackgroundWork(wrapped, c_safe)
+            st = wrapped.Close()
+        check_status(st)
         # `children` is freed here, outside the lock: a child whose last
         # reference was the list _release_children returned now finalizes (and
         # re-acquires the now-free lock) instead of self-deadlocking above.
@@ -2708,26 +2710,36 @@ cdef class TransactionDB(DB):
                   TransactionDBOptions tdb_opts=None,
                   *args, **kwargs):
         self.tdb_opts = None
-        db_path = path_to_string(db_name)
-        if not tdb_opts.try_acquire():
-            raise InvalidArgument(
-                "Transaction Options object is already used by another DB")
-
+        # The base DB.__cinit__ has already claimed `opts` and every supplied
+        # ColumnFamilyOptions (and kept them via its `type(self) != DB` early
+        # return). The outer try guarantees those claims are released on ANY
+        # failure here, otherwise a failed TransactionDB() would leave the
+        # caller's Options stuck in_use forever.
         try:
-            with nogil:
-                st = transaction_db.TransactionDB_Open_ColumnFamilies(
-                    deref(opts.opts),
-                    deref(tdb_opts.opts),
-                    db_path,
-                    self.column_family_descriptors,
-                    &self.column_family_handles,
-                    <transaction_db.TransactionDB **>&self.wrapped_db)
-            self.post_init_steps(st, opts)
+            db_path = path_to_string(db_name)
+            if not tdb_opts.try_acquire():
+                raise InvalidArgument(
+                    "Transaction Options object is already used by another DB")
+            try:
+                with nogil:
+                    st = transaction_db.TransactionDB_Open_ColumnFamilies(
+                        deref(opts.opts),
+                        deref(tdb_opts.opts),
+                        db_path,
+                        self.column_family_descriptors,
+                        &self.column_family_handles,
+                        <transaction_db.TransactionDB **>&self.wrapped_db)
+                self.post_init_steps(st, opts)
+            except:
+                # Open failed and we own the tdb_opts claim: release it. (The
+                # try_acquire-failed case never reaches here, so we never clear a
+                # claim owned by another DB.)
+                tdb_opts.in_use = False
+                raise
         except:
-            # Open failed: release the TransactionDBOptions claim plus the
-            # Options/ColumnFamilyOptions claims made by DB.__cinit__. wrapped_db
-            # is still NULL, so close() is a no-op and will not double-release.
-            tdb_opts.in_use = False
+            # Release the Options/ColumnFamilyOptions claims made by
+            # DB.__cinit__. wrapped_db is still NULL, so close() stays a no-op
+            # and will not double-release.
             self._release_option_claims(opts)
             raise
         self.tdb_opts = tdb_opts
@@ -2741,37 +2753,31 @@ cdef class TransactionDB(DB):
         cdef cpp_bool c_safe = safe
         cdef Status st
         cdef db.DB* wrapped
-        cdef list children = None
-        # Same lifecycle-lock discipline as DB.close() (see there).
+        # Same two-phase discipline as DB.close() (see there): serialize the
+        # bookkeeping + child release under the lock and NULL wrapped_db, then
+        # run the blocking drain/Close outside the lock.
         with self._lock:
             if self.wrapped_db == NULL:
                 return
-            # We need stop backround compactions
-            with nogil:
-                db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
-            # We have to make sure we delete the handles so rocksdb doesn't
-            # assert when we delete the db
+            wrapped = self.wrapped_db
             # Free every outstanding iterator/snapshot before closing so rocksdb
-            # doesn't assert on a still-referenced column family. Keep the
-            # returned strong refs alive until after the lock is released.
-            children = self._release_children()
+            # doesn't assert on a still-referenced column family.
+            self._release_children()
             del self.cf_handles[:]
             self.column_family_handles.clear()
             for copts in self.cf_options:
                 if copts:
                     copts.in_use = False
             del self.cf_options[:]
-            wrapped = self.wrapped_db
-            self.wrapped_db = NULL
-            with nogil:
-                st = (<transaction_db.TransactionDB *>(wrapped)).Close()
             if self.opts is not None:
                 self.opts.in_use = False
             if self.tdb_opts is not None:
                 self.tdb_opts.in_use = False
-            check_status(st)
-        # Freed outside the lock; see DB.close().
-        children = None
+            self.wrapped_db = NULL
+        with nogil:
+            db.CancelAllBackgroundWork(wrapped, c_safe)
+            st = (<transaction_db.TransactionDB *>(wrapped)).Close()
+        check_status(st)
 
     def __dealloc__(self):
         try:
@@ -2799,8 +2805,9 @@ cdef class Snapshot(object):
         # Public entry (e.g. a GC-driven __dealloc__ on any thread): take the DB
         # lifecycle lock so the snapshot release is mutually exclusive with
         # DB.close(), preventing a double ReleaseSnapshot or a release against an
-        # already-closed DB. DB.close() instead calls _force_close_locked()
-        # directly (it already holds the lock; pymutex is non-reentrant).
+        # already-closed DB. The lock is reentrant, so this is safe even when GC
+        # finalizes us on a thread that already holds it. DB.close() calls
+        # _force_close_locked() directly to skip the redundant re-acquire.
         cdef DB db = self.db
         if db is None:
             self._force_close_locked()
@@ -2841,8 +2848,9 @@ cdef class BaseIterator(object):
     def _force_close(self):
         # Public entry (e.g. a GC-driven __dealloc__ on any thread): take the DB
         # lifecycle lock so iterator teardown is mutually exclusive with
-        # DB.close(). DB.close() instead calls _force_close_locked() directly
-        # (it already holds the lock; pymutex is non-reentrant).
+        # DB.close(). The lock is reentrant, so this is safe even when GC
+        # finalizes us on a thread that already holds it. DB.close() calls
+        # _force_close_locked() directly to skip the redundant re-acquire.
         cdef DB db = self.db
         if db is None:
             self._force_close_locked()

@@ -279,6 +279,56 @@ def test_concurrent_custom_comparator_and_merge(tmp_path):
         db.close()
 
 
+def test_close_drains_background_callbacks_without_deadlock(tmp_path):
+    # Regression: close() must run the blocking RocksDB drain OUTSIDE the
+    # lifecycle lock. A user comparator/merge runs on background compaction
+    # threads; if a snapshot of this DB is GC-finalized on such a thread while
+    # close() drains them, the finalizer takes the lifecycle lock — which close()
+    # must not be holding, or the two deadlock. We churn snapshots/iterators
+    # (creating GC pressure) against a custom-comparator DB, then close.
+    from rocksdb.merge_operators import StringAppendOperator
+
+    for _ in range(5):
+        opts = rocksdb.Options(create_if_missing=True)
+        opts.comparator = _ReverseComparator()
+        opts.merge_operator = StringAppendOperator()
+        opts.write_buffer_size = 4096  # force flushes/compactions
+        db = rocksdb.DB(str(tmp_path / f"db_{_}"), opts)
+        stop = threading.Event()
+
+        def churn():
+            while not stop.is_set():
+                try:
+                    snap = db.snapshot()
+                    it = db.iterkeys()
+                    it.seek_to_first()
+                    for _i, _k in zip(range(3), it):
+                        pass
+                    del snap, it
+                    gc.collect()
+                except Exception:
+                    return
+
+        def write():
+            i = 0
+            while not stop.is_set():
+                db.merge(f"k{i % 50}".encode(), b"v" * 64)
+                i += 1
+
+        threads = [threading.Thread(target=churn) for _ in range(3)]
+        threads += [threading.Thread(target=write) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for _ in range(200):
+            db.put(b"p", b"q")
+        stop.set()
+        for t in threads:
+            t.join()
+        db.close()  # drains background compaction threads; must not deadlock
+        del db, opts
+        gc.collect()
+
+
 # --------------------------------------------------------------------------- #
 # The FT leg must actually run without the GIL                                 #
 # --------------------------------------------------------------------------- #
