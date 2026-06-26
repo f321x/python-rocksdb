@@ -1,0 +1,21 @@
+# ThreadSanitizer suppressions for the rocksdb-ng free-threading CI leg.
+#
+# The CI (.github/workflows/freethreading.yml) concatenates CPython's own
+# free-threaded suppressions (Tools/tsan/suppressions_free_threading.txt, taken
+# from the exact interpreter we build) AHEAD of this file. Keep only RocksDB-
+# and binding-specific entries here.
+#
+# Format: one `race:<symbol-or-file-substring>` per line. See
+# https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+#
+# RocksDB is compiled with -fsanitize=thread in this leg, so TSan understands
+# its own atomics and locks and most of its internal synchronisation is clean.
+# Add NARROWLY-scoped entries here only for confirmed-benign reports, and write
+# a one-line justification above each. This file is expected to need tuning as
+# the leg is exercised for the first time (see the design doc's Risks section).
+
+# RocksDB intentionally races on some statistics/perf counters (approximate
+# metrics, not correctness-bearing). Uncomment and scope precisely if a benign
+# counter race is reported under heavy concurrency:
+# race:rocksdb::StatisticsImpl
+# race:rocksdb::PerfContext
