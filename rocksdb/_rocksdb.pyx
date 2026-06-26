@@ -1,4 +1,5 @@
 #cython: language_level=3
+#cython: freethreading_compatible=True
 import cython
 from libcpp.string cimport string
 from libcpp.deque cimport deque
