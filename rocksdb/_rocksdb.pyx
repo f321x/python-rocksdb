@@ -1858,6 +1858,14 @@ cdef class DB(object):
     # resources they hold BEFORE the DB is closed (see _release_children).
     cdef object _iterators
     cdef object _snapshots
+    # Per-DB lifecycle lock. Guards close()/__dealloc__ self-races, the
+    # column-family list read-modify-writes, and snapshot/iterator teardown
+    # against a concurrent close() (e.g. a GC-driven __dealloc__ on another
+    # thread). It is a pymutex (not a critical section) because it must be held
+    # across the `with nogil:` C++ calls; a critical section is released by a
+    # nogil block. The data path (get/put/delete/write/iterator creation) is
+    # intentionally NOT guarded by it. Non-reentrant: see the _locked helpers.
+    cdef cython.pymutex _lock
 
     def __cinit__(self, db_name, Options opts, dict column_families=None,
                   read_only=False, *args, **kwargs):
@@ -2012,20 +2020,34 @@ cdef class DB(object):
         # ColumnFamilySet::~ColumnFamilySet 'last_ref' assertion) or we later
         # dereference an already-closed DB. We must not rely on Python
         # finalization order, which is not guaranteed at GC/interpreter shutdown.
+        #
+        # Called only from close(), which already holds self._lock, so we invoke
+        # the _locked workers directly: taking the lock again here would deadlock
+        # (pymutex is non-reentrant). The list() materialises strong refs so the
+        # children cannot be GC'd from under us mid-iteration.
+        cdef BaseIterator it
+        cdef Snapshot snap
         if self._iterators is not None:
             for it in list(self._iterators):
-                it._force_close()
+                it._force_close_locked()
             self._iterators.clear()
         if self._snapshots is not None:
             for snap in list(self._snapshots):
-                snap._force_close()
+                snap._force_close_locked()
             self._snapshots.clear()
 
     def close(self, safe=True):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
         cdef Status st
-        if self.wrapped_db != NULL:
+        cdef db.DB* wrapped
+        # Hold the lifecycle lock across the whole teardown so a concurrent
+        # close() / GC __dealloc__ / snapshot release cannot double-close or
+        # use-after-free. pymutex can be held across the `with nogil:` blocks
+        # below. check_status() may raise; the `with` releases the lock anyway.
+        with self._lock:
+            if self.wrapped_db == NULL:
+                return
             # We need stop backround compactions
             with nogil:
                 db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
@@ -2042,9 +2064,12 @@ cdef class DB(object):
                 if copts:
                     copts.in_use = False
             del self.cf_options[:]
+            # Null the pointer under the lock BEFORE Close() so any other thread
+            # that takes the lock next sees a closed DB. Close() runs on a local.
+            wrapped = self.wrapped_db
+            self.wrapped_db = NULL
             with nogil:
-                st = self.wrapped_db.Close()
-                self.wrapped_db = NULL
+                st = wrapped.Close()
             if self.opts is not None:
                 self.opts.in_use = False
             check_status(st)
@@ -2068,12 +2093,15 @@ cdef class DB(object):
 
     @property
     def column_families(self):
-        return [handle.weakref for handle in self.cf_handles]
+        # Lock so a concurrent create/drop can't mutate cf_handles mid-iteration.
+        with self._lock:
+            return [handle.weakref for handle in self.cf_handles]
 
     def get_column_family(self, bytes name):
-        for handle in self.cf_handles:
-            if handle.name == name:
-                return handle.weakref
+        with self._lock:
+            for handle in self.cf_handles:
+                if handle.name == name:
+                    return handle.weakref
 
     def put(self, key, value, sync=False, disable_wal=False, ignore_missing_column_families=False, no_slowdown=False, low_pri=False):
         self._ensure_open()
@@ -2573,27 +2601,34 @@ cdef class DB(object):
         cdef Status st
         cdef string c_name = name
 
-        for handle in self.cf_handles:
-            if handle.name == name:
-                raise ValueError(f"{name} is already an existing column family")
+        # Hold the lifecycle lock for the whole read-modify-write: the duplicate
+        # name scan, the C++ call, and the append to BOTH parallel lists must be
+        # atomic so concurrent create/drop cannot desync cf_handles/cf_options.
+        with self._lock:
+            if self.wrapped_db == NULL:
+                raise InvalidArgument("Cannot create a column family on a closed DB")
 
-        if not copts.try_acquire():
-            raise Exception("ColumnFamilyOptions are in_use by another column family")
+            for handle in self.cf_handles:
+                if handle.name == name:
+                    raise ValueError(f"{name} is already an existing column family")
 
-        try:
-            with nogil:
-                st = self.wrapped_db.CreateColumnFamily(deref(copts.copts), c_name, &cf_handle)
-            check_status(st)
-        except:
-            # Creation failed; release the claim so the options can be reused.
-            copts.in_use = False
-            raise
+            if not copts.try_acquire():
+                raise Exception("ColumnFamilyOptions are in_use by another column family")
 
-        handle = _ColumnFamilyHandle.from_handle_ptr(cf_handle)
+            try:
+                with nogil:
+                    st = self.wrapped_db.CreateColumnFamily(deref(copts.copts), c_name, &cf_handle)
+                check_status(st)
+            except:
+                # Creation failed; release the claim so the options can be reused.
+                copts.in_use = False
+                raise
 
-        self.cf_handles.append(handle)
-        self.cf_options.append(copts)
-        return handle.weakref
+            handle = _ColumnFamilyHandle.from_handle_ptr(cf_handle)
+
+            self.cf_handles.append(handle)
+            self.cf_options.append(copts)
+            return handle.weakref
 
     def drop_column_family(self, ColumnFamilyHandle weak_handle not None):
         self._ensure_open()
@@ -2601,19 +2636,26 @@ cdef class DB(object):
         cdef ColumnFamilyOptions copts
         cdef Status st
 
-        cf_handle = weak_handle.get_handle()
+        # Lock the whole drop: the C++ call plus the index()/pop()/del across
+        # both parallel lists must be atomic, otherwise a concurrent create/drop
+        # can shift indices and delete the wrong entry or desync the two lists.
+        with self._lock:
+            if self.wrapped_db == NULL:
+                raise InvalidArgument("Cannot drop a column family on a closed DB")
 
-        with nogil:
-            st = self.wrapped_db.DropColumnFamily(cf_handle)
-        check_status(st)
+            cf_handle = weak_handle.get_handle()
 
-        py_handle = weak_handle._ref()
-        index = self.cf_handles.index(py_handle)
-        copts = self.cf_options.pop(index)
-        del self.cf_handles[index]
-        del py_handle
-        if copts:
-            copts.in_use = False
+            with nogil:
+                st = self.wrapped_db.DropColumnFamily(cf_handle)
+            check_status(st)
+
+            py_handle = weak_handle._ref()
+            index = self.cf_handles.index(py_handle)
+            copts = self.cf_options.pop(index)
+            del self.cf_handles[index]
+            del py_handle
+            if copts:
+                copts.in_use = False
 
 
 def repair_db(db_name, Options opts):
@@ -2678,7 +2720,11 @@ cdef class TransactionDB(DB):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
         cdef Status st
-        if self.wrapped_db != NULL:
+        cdef db.DB* wrapped
+        # Same lifecycle-lock discipline as DB.close() (see there).
+        with self._lock:
+            if self.wrapped_db == NULL:
+                return
             # We need stop backround compactions
             with nogil:
                 db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
@@ -2693,9 +2739,10 @@ cdef class TransactionDB(DB):
                 if copts:
                     copts.in_use = False
             del self.cf_options[:]
+            wrapped = self.wrapped_db
+            self.wrapped_db = NULL
             with nogil:
-                st = (<transaction_db.TransactionDB *>(self.wrapped_db)).Close()
-                self.wrapped_db = NULL
+                st = (<transaction_db.TransactionDB *>(wrapped)).Close()
             if self.opts is not None:
                 self.opts.in_use = False
             if self.tdb_opts is not None:
@@ -2725,9 +2772,23 @@ cdef class Snapshot(object):
         self._force_close()
 
     def _force_close(self):
+        # Public entry (e.g. a GC-driven __dealloc__ on any thread): take the DB
+        # lifecycle lock so the snapshot release is mutually exclusive with
+        # DB.close(), preventing a double ReleaseSnapshot or a release against an
+        # already-closed DB. DB.close() instead calls _force_close_locked()
+        # directly (it already holds the lock; pymutex is non-reentrant).
+        cdef DB db = self.db
+        if db is None:
+            self._force_close_locked()
+            return
+        with db._lock:
+            self._force_close_locked()
+
+    cdef _force_close_locked(self):
         # Release the snapshot while the DB is still open. Idempotent; if the DB
         # has already been closed (wrapped_db == NULL) there is nothing to
         # release and dereferencing it would segfault, so we just drop our ref.
+        # Caller must hold self.db._lock (or self.db must be None).
         cdef db.DB* wrapped = NULL
         if self.ptr != NULL and self.db is not None and self.db.wrapped_db != NULL:
             wrapped = self.db.wrapped_db
@@ -2754,10 +2815,23 @@ cdef class BaseIterator(object):
         self._force_close()
 
     def _force_close(self):
+        # Public entry (e.g. a GC-driven __dealloc__ on any thread): take the DB
+        # lifecycle lock so iterator teardown is mutually exclusive with
+        # DB.close(). DB.close() instead calls _force_close_locked() directly
+        # (it already holds the lock; pymutex is non-reentrant).
+        cdef DB db = self.db
+        if db is None:
+            self._force_close_locked()
+            return
+        with db._lock:
+            self._force_close_locked()
+
+    cdef _force_close_locked(self):
         # Delete the underlying rocksdb::Iterator and forget it. Idempotent, and
         # called from DB.close() (before DB::Close()) so the iterator stops
         # pinning its column family's SuperVersion in time to avoid the
-        # ColumnFamilySet 'last_ref' assertion.
+        # ColumnFamilySet 'last_ref' assertion. Caller must hold self.db._lock
+        # (or self.db must be None).
         if self.ptr != NULL:
             del self.ptr
             self.ptr = NULL
