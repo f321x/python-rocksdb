@@ -38,8 +38,13 @@ def _run(open_stmt, db_path, body):
     script = open_stmt.replace("DB_PATH", repr(db_path)) + body + "\nprint('CLEAN_EXIT')\n"
     env = dict(os.environ)
     env["PYTHONPATH"] = _PKG_PARENT + os.pathsep + env.get("PYTHONPATH", "")
+    # `-P` keeps the CWD off sys.path[0]. Without it, when the tests run from a
+    # source checkout (CWD = repo root), `python -c` prepends '' ahead of the
+    # PYTHONPATH entry above, so the subprocess imports the un-built in-tree
+    # `rocksdb/` (no compiled `_rocksdb`) and dies with ModuleNotFoundError
+    # instead of the installed package the parent test actually imported.
     return subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-P", "-c", script],
         capture_output=True,
         text=True,
         env=env,
