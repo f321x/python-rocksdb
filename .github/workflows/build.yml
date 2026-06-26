@@ -55,11 +55,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       LIBROCKSDB_PATH: /opt/rocksdb-${{ matrix.rocksdb_ver }}
+      # On the free-threaded leg (py_ver ends in 't') force the GIL off so the
+      # suite actually runs without it; ignored on the regular (GIL) builds.
+      PYTHON_GIL: ${{ endsWith(matrix.py_ver, 't') && '0' || '1' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        py_ver: ['3.11', '3.12', '3.13', '3.14']
+        # '3.14t' is the free-threaded build (setup-python supports the 't'
+        # variants; 3.14t is reached via allow-prereleases).
+        py_ver: ['3.11', '3.12', '3.13', '3.14', '3.14t']
         rocksdb_ver: ['v10.10.1', 'v9.10.0', 'v8.9.1']
 
     steps:
@@ -101,6 +106,13 @@ jobs:
         # the build fails in confusing ways.
         run: |
           python3 -m pip install '.[test]'
+
+      - name: 'Assert the GIL is disabled (free-threaded leg)'
+        if: ${{ endsWith(matrix.py_ver, 't') }}
+        # If the extension failed to declare freethreading_compatible, importing
+        # it would silently re-enable the GIL; fail loudly here instead.
+        run: |
+          python3 -c "import rocksdb, sys; assert not sys._is_gil_enabled(), 'importing rocksdb re-enabled the GIL'; print('GIL is disabled')"
 
       - name: Run tests
         # Use `--pyargs` to interpret parameter as module to import, not as a
