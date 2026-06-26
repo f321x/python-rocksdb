@@ -1881,13 +1881,15 @@ cdef class DB(object):
                   read_only=False, *args, **kwargs):
         cdef Status st
         cdef bytes default_cf_name = db.kDefaultColumnFamilyName
+        # First, so the lifecycle lock is always available even if a later
+        # allocation here fails and __dealloc__ -> close() runs.
+        self._lock = threading.RLock()
         self.wrapped_db = NULL
         self.opts = None
         self.cf_handles = []
         self.cf_options = []
         self._iterators = weakref.WeakSet()
         self._snapshots = weakref.WeakSet()
-        self._lock = threading.RLock()
 
         # Atomically claim the Options object up front so two threads cannot
         # both attach the same mutable Options to a DB. The claim is released by
@@ -2091,10 +2093,6 @@ cdef class DB(object):
             db.CancelAllBackgroundWork(wrapped, c_safe)
             st = wrapped.Close()
         check_status(st)
-        # `children` is freed here, outside the lock: a child whose last
-        # reference was the list _release_children returned now finalizes (and
-        # re-acquires the now-free lock) instead of self-deadlocking above.
-        children = None
 
     def __dealloc__(self):
         if type(self) != DB:
