@@ -18,6 +18,7 @@ Tested with python 3.11-3.14 and RocksDB versions 8.x, 9.x and 10.x.
 
     Instructions how to install <installation>
     Tutorial <tutorial/index>
+    Thread safety and free-threading <thread_safety>
     API <api/index>
     Changelog <changelog>
 
