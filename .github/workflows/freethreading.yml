@@ -117,5 +117,7 @@ jobs:
           cat "${CPYTHON_PREFIX}/tsan_suppressions_cpython.txt" \
               contrib/tsan/suppressions.txt > tsan_suppressions.txt
           # Confirm the interpreter really runs without the GIL before testing.
-          python3.14t -c "import rocksdb, sys; assert not sys._is_gil_enabled(), 'GIL re-enabled'"
-          python3.14t -m pytest -v --pyargs rocksdb.tests.test_concurrency
+          # `-P` keeps the repo root off sys.path so `rocksdb` resolves to the
+          # installed package, not the un-built source-tree `rocksdb/`.
+          python3.14t -P -c "import rocksdb, sys; assert not sys._is_gil_enabled(), 'GIL re-enabled'"
+          python3.14t -P -m pytest -v --pyargs rocksdb.tests.test_concurrency

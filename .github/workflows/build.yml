@@ -111,8 +111,10 @@ jobs:
         if: ${{ endsWith(matrix.py_ver, 't') }}
         # If the extension failed to declare freethreading_compatible, importing
         # it would silently re-enable the GIL; fail loudly here instead.
+        # `-P` keeps the repo root off sys.path so `import rocksdb` resolves to
+        # the installed package, not the un-built source-tree `rocksdb/`.
         run: |
-          python3 -c "import rocksdb, sys; assert not sys._is_gil_enabled(), 'importing rocksdb re-enabled the GIL'; print('GIL is disabled')"
+          python3 -P -c "import rocksdb, sys; assert not sys._is_gil_enabled(), 'importing rocksdb re-enabled the GIL'; print('GIL is disabled')"
 
       - name: Run tests
         # Use `--pyargs` to interpret parameter as module to import, not as a

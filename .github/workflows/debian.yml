@@ -57,5 +57,10 @@ jobs:
           python3 -m pip install --break-system-packages -v '.[test]'
 
       - name: Run tests
+        # Use the `pytest` console script, NOT `python3 -m pytest`: `-m` prepends
+        # the repo root to sys.path, so `--pyargs rocksdb` would import the
+        # un-built source-tree `rocksdb/` (no compiled `_rocksdb`) instead of the
+        # installed package and fail to find the shared library. See build.yml /
+        # tox.ini, which document the same convention.
         run: |
-          python3 -m pytest --pyargs rocksdb
+          pytest --pyargs rocksdb
