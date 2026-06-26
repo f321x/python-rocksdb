@@ -2013,7 +2013,7 @@ cdef class DB(object):
     cdef _register_snapshot(self, snap):
         self._snapshots.add(snap)
 
-    cdef _release_children(self):
+    cdef list _release_children(self):
         # Deterministically free every outstanding iterator and snapshot BEFORE
         # the underlying DB is closed. An open rocksdb::Iterator pins a column
         # family SuperVersion and a live snapshot must be released through the
@@ -2026,22 +2026,36 @@ cdef class DB(object):
         # the _locked workers directly: taking the lock again here would deadlock
         # (pymutex is non-reentrant). The list() materialises strong refs so the
         # children cannot be GC'd from under us mid-iteration.
+        #
+        # Returns those strong refs so close() can keep them alive until AFTER it
+        # releases self._lock. A child's __dealloc__ goes through the *public*
+        # _force_close, which re-acquires self._lock; if a child's last reference
+        # were dropped while we still hold the lock it would finalize here and
+        # self-deadlock. Freeing them after the lock is released avoids that.
         cdef BaseIterator it
         cdef Snapshot snap
+        cdef list kept = []
+        cdef list current
         if self._iterators is not None:
-            for it in list(self._iterators):
+            current = list(self._iterators)
+            for it in current:
                 it._force_close_locked()
+            kept.extend(current)
             self._iterators.clear()
         if self._snapshots is not None:
-            for snap in list(self._snapshots):
+            current = list(self._snapshots)
+            for snap in current:
                 snap._force_close_locked()
+            kept.extend(current)
             self._snapshots.clear()
+        return kept
 
     def close(self, safe=True):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
         cdef Status st
         cdef db.DB* wrapped
+        cdef list children = None
         # Hold the lifecycle lock across the whole teardown so a concurrent
         # close() / GC __dealloc__ / snapshot release cannot double-close or
         # use-after-free. pymutex can be held across the `with nogil:` blocks
@@ -2053,8 +2067,9 @@ cdef class DB(object):
             with nogil:
                 db.CancelAllBackgroundWork(self.wrapped_db, c_safe)
             # Free every outstanding iterator/snapshot before closing so rocksdb
-            # doesn't assert on a still-referenced column family.
-            self._release_children()
+            # doesn't assert on a still-referenced column family. Keep the
+            # returned strong refs alive until after the lock is released.
+            children = self._release_children()
             # We have to make sure we delete the handles so rocksdb doesn't
             # assert when we close the db
             del self.cf_handles[:]
@@ -2074,6 +2089,10 @@ cdef class DB(object):
             if self.opts is not None:
                 self.opts.in_use = False
             check_status(st)
+        # `children` is freed here, outside the lock: a child whose last
+        # reference was the list _release_children returned now finalizes (and
+        # re-acquires the now-free lock) instead of self-deadlocking above.
+        children = None
 
     def __dealloc__(self):
         if type(self) != DB:
@@ -2722,6 +2741,7 @@ cdef class TransactionDB(DB):
         cdef cpp_bool c_safe = safe
         cdef Status st
         cdef db.DB* wrapped
+        cdef list children = None
         # Same lifecycle-lock discipline as DB.close() (see there).
         with self._lock:
             if self.wrapped_db == NULL:
@@ -2732,8 +2752,9 @@ cdef class TransactionDB(DB):
             # We have to make sure we delete the handles so rocksdb doesn't
             # assert when we delete the db
             # Free every outstanding iterator/snapshot before closing so rocksdb
-            # doesn't assert on a still-referenced column family.
-            self._release_children()
+            # doesn't assert on a still-referenced column family. Keep the
+            # returned strong refs alive until after the lock is released.
+            children = self._release_children()
             del self.cf_handles[:]
             self.column_family_handles.clear()
             for copts in self.cf_options:
@@ -2749,6 +2770,8 @@ cdef class TransactionDB(DB):
             if self.tdb_opts is not None:
                 self.tdb_opts.in_use = False
             check_status(st)
+        # Freed outside the lock; see DB.close().
+        children = None
 
     def __dealloc__(self):
         try:
