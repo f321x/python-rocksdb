@@ -1,6 +1,54 @@
 Changelog
 *********
 
+Version 2.3
+-----------
+
+Free-threading release: the extension now runs on the free-threaded ("nogil")
+builds of CPython, and the DB lifecycle and the C++ callback trampolines were
+hardened so a single :py:class:`rocksdb.DB` is safe to share across threads. See
+:doc:`thread_safety` for the full model and the sharing contract.
+
+Free-threading support
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+* **The extension is declared free-threading compatible.** Importing ``rocksdb``
+  on a free-threaded interpreter (CPython 3.13t/3.14t) no longer re-enables the
+  GIL, so the binding actually runs without it. CI now exercises the suite on
+  free-threaded 3.14t, including a ThreadSanitizer leg that fails on any
+  unsuppressed data race.
+* **A single** :py:class:`rocksdb.DB` / :py:class:`rocksdb.TransactionDB`
+  **is now safe to use concurrently.** The data path (``get`` / ``put`` /
+  ``delete`` / ``write`` / ``multi_get`` / ``key_may_exist``) runs lock-free on
+  RocksDB's own thread-safety, while open/close and column-family management are
+  serialized per DB by an internal reentrant lock. Concurrent and repeated
+  ``close()`` (including a garbage-collected ``__dealloc__`` on another thread)
+  is safe and idempotent.
+* **Custom Python comparators, merge operators and slice transforms are safe
+  under concurrency.** The C++ trampolines that call back into Python now hold a
+  counted reference to their Python context object, so concurrent use no longer
+  races against it being collected.
+* Reads of :py:class:`rocksdb.Options` / column-family handles that previously
+  had a check-then-use race were made atomic.
+
+Bug fixes
+~~~~~~~~~
+
+* **Closing a DB with a live iterator or snapshot no longer aborts the
+  process.** An open iterator pins a column-family ``SuperVersion``, so
+  ``DB::Close()`` tripped ``ColumnFamilySet::~ColumnFamilySet(): Assertion
+  'last_ref' failed``; a live snapshot dereferenced an already-cleared handle and
+  segfaulted. ``close()`` now drains outstanding iterators and snapshots first,
+  and using an iterator after ``close()`` raises cleanly instead of crashing.
+
+Internal
+~~~~~~~~
+
+* Dropped the requirement to also stay compilable under Debian's system Cython
+  3.0.11; the build now requires **Cython >= 3.2.5, < 4**, freeing the sources to
+  use free-threading primitives (``freethreading_compatible``, ``pymutex``,
+  ``critical_section``).
+
 Version 2.2
 -----------
 
