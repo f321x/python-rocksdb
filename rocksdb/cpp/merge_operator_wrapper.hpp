@@ -7,6 +7,24 @@ using rocksdb::Logger;
 using rocksdb::MergeOperator;
 using rocksdb::AssociativeMergeOperator;
 
+// See comparator_wrapper.hpp for the rationale; the guard makes this a no-op
+// when that header is also compiled into the same translation unit.
+#ifndef PYROCKS_DECREF_CONTEXT_DEFINED
+#define PYROCKS_DECREF_CONTEXT_DEFINED
+#include <Python.h>
+static inline void pyrocks_decref_context(void* ctx) {
+    if (ctx == nullptr) return;
+#if PY_VERSION_HEX >= 0x030D0000
+    if (Py_IsFinalizing()) return;
+#else
+    if (_Py_IsFinalizing()) return;
+#endif
+    PyGILState_STATE gstate = PyGILState_Ensure();
+    Py_DECREF((PyObject*)ctx);
+    PyGILState_Release(gstate);
+}
+#endif
+
 namespace py_rocks {
     class AssociativeMergeOperatorWrapper: public AssociativeMergeOperator {
         public:
@@ -26,7 +44,13 @@ namespace py_rocks {
                     name(name),
                     merge_context(merge_context),
                     merge_callback(merge_callback)
-            {}
+            {
+                Py_XINCREF((PyObject*)this->merge_context);
+            }
+
+            virtual ~AssociativeMergeOperatorWrapper() {
+                pyrocks_decref_context(this->merge_context);
+            }
 
             virtual bool Merge(
                 const Slice& key,
@@ -83,7 +107,17 @@ namespace py_rocks {
                     partial_merge_context(partial_merge_context),
                     full_merge_callback(full_merge_callback),
                     partial_merge_callback(partial_merge_callback)
-            {}
+            {
+                // The two contexts are usually the same Python object; incref
+                // each and decref each so the count stays balanced regardless.
+                Py_XINCREF((PyObject*)this->full_merge_context);
+                Py_XINCREF((PyObject*)this->partial_merge_context);
+            }
+
+            virtual ~MergeOperatorWrapper() {
+                pyrocks_decref_context(this->full_merge_context);
+                pyrocks_decref_context(this->partial_merge_context);
+            }
 
             virtual bool FullMerge(
                 const Slice& key,
