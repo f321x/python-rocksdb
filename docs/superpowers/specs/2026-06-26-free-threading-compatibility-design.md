@@ -208,3 +208,27 @@ Clean, logically separate commits on `main`:
 7. CI: `build.yml` `3.14t` leg
 8. CI: TSan `freethreading.yml`
 9. docs: thread-safety section
+
+## Revisions (post-implementation adversarial review)
+
+An adversarial review of the implemented changes found two deadlocks in the
+lifecycle lock; the design was refined accordingly:
+
+- **The lifecycle lock is a `threading.RLock`, not a `cython.pymutex`.** A GC
+  triggered by an allocation *inside* a locked region can finalize a
+  `Snapshot`/iterator of the same DB on the same thread, whose `__dealloc__ →
+  _force_close` re-enters the lock. A non-reentrant lock self-deadlocks there.
+  `RLock` is reentrant and is still holdable across `with nogil:` (the original
+  reason `pymutex` was chosen), so it satisfies both constraints. The
+  object-local TOCTOUs (`Options.in_use`, weakref cache) still use
+  `cython.critical_section`.
+- **`close()` runs the blocking drain outside the lock.** Holding the lock
+  across `CancelAllBackgroundWork()`/`Close()` deadlocks against a background
+  compaction thread that, mid user-callback, GC-finalizes a `Snapshot` of this
+  DB and blocks taking the lock. `close()` now does the serialized bookkeeping
+  (release children, clear cf state, NULL `wrapped_db`) under the lock, then
+  drains and closes the local pointer with the lock released; concurrent
+  closers/finalizers see `wrapped_db == NULL` and no-op.
+
+The review also fixed an `Options`-claim leak on the `TransactionDB`
+construction-failure path and marked the C++ trampoline wrappers non-copyable.
