@@ -698,9 +698,16 @@ cdef class _ColumnFamilyHandle:
 
     @property
     def weakref(self):
-        if self.weak_handle is None:
-            self.weak_handle = ColumnFamilyHandle.from_wrapper(self)
-        return self.weak_handle
+        # Lazily mint (and cache) the public weakref wrapper. The critical
+        # section makes the check-then-set atomic on a free-threaded build so
+        # two threads cannot create divergent wrappers for the same handle —
+        # that would break the __hash__/__eq__ invariant (a wrapper would
+        # compare equal to its twin but hash differently). On a GIL build the
+        # critical section is a no-op; the GIL already serializes this.
+        with cython.critical_section(self):
+            if self.weak_handle is None:
+                self.weak_handle = ColumnFamilyHandle.from_wrapper(self)
+            return self.weak_handle
 
 cdef class ColumnFamilyHandle:
     """ This represents a ColumnFamilyHandle """
@@ -790,6 +797,18 @@ cdef class ColumnFamilyOptions(object):
     def __dealloc__(self):
         if not self.copts == NULL:
             del self.copts
+
+    cdef bint try_acquire(self) noexcept:
+        # Atomically claim this options object for use by a DB / column family.
+        # Returns True on success, False if it is already in use. The critical
+        # section makes the check-then-set indivisible on a free-threaded build
+        # so one mutable Options cannot be attached to two DBs at once (which
+        # would let them share, and double-free, a single C++ Options).
+        with cython.critical_section(self):
+            if self.in_use:
+                return False
+            self.in_use = True
+            return True
 
     def __init__(self, **kwargs):
         self.py_comparator = BytewiseComparator()
@@ -1631,6 +1650,15 @@ cdef class TransactionDBOptions(object):
         if not self.opts == NULL:
             del self.opts
 
+    cdef bint try_acquire(self) noexcept:
+        # Atomic claim, identical in intent to ColumnFamilyOptions.try_acquire:
+        # a TransactionDBOptions must not back two TransactionDBs at once.
+        with cython.critical_section(self):
+            if self.in_use:
+                return False
+            self.in_use = True
+            return True
+
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -1842,64 +1870,87 @@ cdef class DB(object):
         self._iterators = weakref.WeakSet()
         self._snapshots = weakref.WeakSet()
 
-        if opts.in_use:
+        # Atomically claim the Options object up front so two threads cannot
+        # both attach the same mutable Options to a DB. The claim is released by
+        # close(), or by _release_option_claims() if construction fails before
+        # the DB is live (otherwise a failed DB() would leave its Options stuck
+        # in_use forever).
+        if not opts.try_acquire():
             raise InvalidArgument(
                 "Options object is already used by another DB")
-
-        if not column_families or default_cf_name not in column_families:
-            # Always add the default column family
-            self.column_family_descriptors.push_back(
-                db.ColumnFamilyDescriptor(
-                    db.kDefaultColumnFamilyName,
-                    options.ColumnFamilyOptions(deref(opts.opts))
-                )
-            )
-            self.cf_options.append(None)  # Since they are the same as db
-        if column_families:
-            for cf_name, cf_options in column_families.items():
-                if not isinstance(cf_name, bytes):
-                    raise TypeError(
-                        f"column family name {cf_name!r} is not of type {bytes}!"
-                    )
-                if not isinstance(cf_options, ColumnFamilyOptions):
-                    raise TypeError(
-                        f"column family options {cf_options!r} is not of type "
-                        f"{ColumnFamilyOptions}!"
-                    )
-                if (<ColumnFamilyOptions>cf_options).in_use:
-                    raise Exception(
-                        f"ColumnFamilyOptions object for {cf_name} is already "
-                        "used by another Column Family"
-                    )
-                (<ColumnFamilyOptions>cf_options).in_use = True
+        try:
+            if not column_families or default_cf_name not in column_families:
+                # Always add the default column family
                 self.column_family_descriptors.push_back(
                     db.ColumnFamilyDescriptor(
-                        cf_name,
-                        deref((<ColumnFamilyOptions>cf_options).copts)
+                        db.kDefaultColumnFamilyName,
+                        options.ColumnFamilyOptions(deref(opts.opts))
                     )
                 )
-                self.cf_options.append(cf_options)
-        if type(self) != DB:
-            return
-        db_path = path_to_string(db_name)
-        if read_only:
-            with nogil:
-                st = db.DB_OpenForReadOnly_ColumnFamilies(
-                    deref(opts.opts),
-                    db_path,
-                    self.column_family_descriptors,
-                    &self.column_family_handles,
-                    &self.wrapped_db,
-                    False)
-        else:
-            with nogil:
-                st = db.DB_Open_ColumnFamilies(
-                    deref(opts.opts),
-                    db_path,
-                    self.column_family_descriptors,
-                    &self.column_family_handles,
-                    &self.wrapped_db)
-        self.post_init_steps(st, opts)
+                self.cf_options.append(None)  # Since they are the same as db
+            if column_families:
+                for cf_name, cf_options in column_families.items():
+                    if not isinstance(cf_name, bytes):
+                        raise TypeError(
+                            f"column family name {cf_name!r} is not of type {bytes}!"
+                        )
+                    if not isinstance(cf_options, ColumnFamilyOptions):
+                        raise TypeError(
+                            f"column family options {cf_options!r} is not of type "
+                            f"{ColumnFamilyOptions}!"
+                        )
+                    if not (<ColumnFamilyOptions>cf_options).try_acquire():
+                        raise Exception(
+                            f"ColumnFamilyOptions object for {cf_name} is already "
+                            "used by another Column Family"
+                        )
+                    # Track the claim immediately so _release_option_claims()
+                    # frees it if anything below raises.
+                    self.cf_options.append(cf_options)
+                    self.column_family_descriptors.push_back(
+                        db.ColumnFamilyDescriptor(
+                            cf_name,
+                            deref((<ColumnFamilyOptions>cf_options).copts)
+                        )
+                    )
+            if type(self) != DB:
+                # Subclass (TransactionDB) opens the DB itself; keep the claims.
+                return
+            db_path = path_to_string(db_name)
+            if read_only:
+                with nogil:
+                    st = db.DB_OpenForReadOnly_ColumnFamilies(
+                        deref(opts.opts),
+                        db_path,
+                        self.column_family_descriptors,
+                        &self.column_family_handles,
+                        &self.wrapped_db,
+                        False)
+            else:
+                with nogil:
+                    st = db.DB_Open_ColumnFamilies(
+                        deref(opts.opts),
+                        db_path,
+                        self.column_family_descriptors,
+                        &self.column_family_handles,
+                        &self.wrapped_db)
+            self.post_init_steps(st, opts)
+        except:
+            # Open / setup failed: release every Options claim we made so the
+            # caller can reuse them. wrapped_db stays NULL, so close() is a
+            # no-op and will not double-release.
+            self._release_option_claims(opts)
+            raise
+
+    cdef _release_option_claims(self, Options opts):
+        # Clear the in_use flag on the main Options and every claimed
+        # ColumnFamilyOptions. Used only on the construction-failure path.
+        cdef ColumnFamilyOptions co
+        if opts is not None:
+            opts.in_use = False
+        for co in self.cf_options:
+            if co is not None:
+                co.in_use = False
 
     cdef post_init_steps(self, Status st, Options opts):
         check_status(st)
@@ -1944,8 +1995,8 @@ cdef class DB(object):
             if copts.prefix_extractor is not None:
                 copts.py_prefix_extractor.set_info_log(info_log)
 
+        # Options is already claimed (in_use set) by __cinit__'s try_acquire.
         self.opts = opts
-        self.opts.in_use = True
 
     cdef _register_iterator(self, it):
         self._iterators.add(it)
@@ -2526,13 +2577,17 @@ cdef class DB(object):
             if handle.name == name:
                 raise ValueError(f"{name} is already an existing column family")
 
-        if copts.in_use:
+        if not copts.try_acquire():
             raise Exception("ColumnFamilyOptions are in_use by another column family")
 
-        copts.in_use = True
-        with nogil:
-            st = self.wrapped_db.CreateColumnFamily(deref(copts.copts), c_name, &cf_handle)
-        check_status(st)
+        try:
+            with nogil:
+                st = self.wrapped_db.CreateColumnFamily(deref(copts.copts), c_name, &cf_handle)
+            check_status(st)
+        except:
+            # Creation failed; release the claim so the options can be reused.
+            copts.in_use = False
+            raise
 
         handle = _ColumnFamilyHandle.from_handle_ptr(cf_handle)
 
@@ -2592,21 +2647,28 @@ cdef class TransactionDB(DB):
                   *args, **kwargs):
         self.tdb_opts = None
         db_path = path_to_string(db_name)
-        if tdb_opts.in_use:
+        if not tdb_opts.try_acquire():
             raise InvalidArgument(
                 "Transaction Options object is already used by another DB")
 
-        with nogil:
-            st = transaction_db.TransactionDB_Open_ColumnFamilies(
-                deref(opts.opts),
-                deref(tdb_opts.opts),
-                db_path,
-                self.column_family_descriptors,
-                &self.column_family_handles,
-                <transaction_db.TransactionDB **>&self.wrapped_db)
-        self.post_init_steps(st, opts)
+        try:
+            with nogil:
+                st = transaction_db.TransactionDB_Open_ColumnFamilies(
+                    deref(opts.opts),
+                    deref(tdb_opts.opts),
+                    db_path,
+                    self.column_family_descriptors,
+                    &self.column_family_handles,
+                    <transaction_db.TransactionDB **>&self.wrapped_db)
+            self.post_init_steps(st, opts)
+        except:
+            # Open failed: release the TransactionDBOptions claim plus the
+            # Options/ColumnFamilyOptions claims made by DB.__cinit__. wrapped_db
+            # is still NULL, so close() is a no-op and will not double-release.
+            tdb_opts.in_use = False
+            self._release_option_claims(opts)
+            raise
         self.tdb_opts = tdb_opts
-        self.tdb_opts.in_use = True
 
     property transaction_options:
         def __get__(self):
