@@ -141,7 +141,16 @@ def test_concurrent_create_same_name_single_winner(tmp_path):
 # B2: concurrent close() is idempotent (no double Close / double-free)         #
 # --------------------------------------------------------------------------- #
 def test_concurrent_close_is_idempotent(tmp_path):
+    # Open with several column families so close() has multiple C++ handles to
+    # destroy. Each must be deleted BEFORE DB::Close() (its destructor locks the
+    # DB's internal mutex); on a free-threaded build a handle wrapper's
+    # __dealloc__ can otherwise be deferred to another thread and run after the
+    # DB is gone — a use-after-free that segfaulted ~ColumnFamilyHandleImpl().
+    # Closing from many threads at once must still destroy every handle exactly
+    # once, under the lock, before Close().
     db = _open(tmp_path)
+    for n in range(5):
+        db.create_column_family(f"cf_{n}".encode(), rocksdb.ColumnFamilyOptions())
     db.put(b"k", b"v")
 
     def closer(i, barrier):

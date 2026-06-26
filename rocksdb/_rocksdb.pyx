@@ -2050,6 +2050,29 @@ cdef class DB(object):
                 snap._force_close_locked()
             self._snapshots.clear()
 
+    cdef _destroy_cf_handles_locked(self):
+        # Destroy the owned C++ ColumnFamilyHandles explicitly, here under the
+        # lifecycle lock and while the DB is still open — mirroring how iterators
+        # and snapshots are torn down in _release_children(). RocksDB requires
+        # every handle returned by Open()/CreateColumnFamily() to be deleted
+        # BEFORE the DB is closed: ~ColumnFamilyHandleImpl() locks the DB's
+        # internal mutex and unrefs its column-family data, so running it after
+        # DB::Close() dereferences freed memory and segfaults.
+        #
+        # We must NOT leave this to each _ColumnFamilyHandle wrapper's
+        # __dealloc__ (the old `del self.cf_handles[:]` alone). On a
+        # free-threaded build a wrapper's deallocation can be DEFERRED and run
+        # later on another thread (e.g. the main thread draining pending calls),
+        # after close() has already freed the DB. Deleting each handle here and
+        # NULLing it makes that later __dealloc__ a safe idempotent no-op. The
+        # raw pointers cached in self.column_family_handles alias these same
+        # handles, so the caller clears that vector WITHOUT deleting again.
+        cdef _ColumnFamilyHandle cfh
+        for cfh in self.cf_handles:
+            if cfh.handle != NULL:
+                del cfh.handle
+                cfh.handle = NULL
+
     def close(self, safe=True):
         cdef ColumnFamilyOptions copts
         cdef cpp_bool c_safe = safe
@@ -2068,11 +2091,15 @@ cdef class DB(object):
             # Free every outstanding iterator/snapshot before closing so rocksdb
             # doesn't assert on a still-referenced column family.
             self._release_children()
-            # We have to make sure we delete the handles so rocksdb doesn't
-            # assert when we close the db
+            # Delete the C++ column-family handles so rocksdb doesn't assert when
+            # we close the db. Done explicitly here (not merely via the wrappers'
+            # __dealloc__) so it happens under the lock and strictly before
+            # Close(); see _destroy_cf_handles_locked for why FT dealloc timing
+            # makes the old approach crash.
+            self._destroy_cf_handles_locked()
+            # Drop the now-neutered wrappers and the dangling raw pointers we
+            # cached (the handles they aliased were just freed above).
             del self.cf_handles[:]
-            # cf_handles held the only strong refs to the wrapped handles (now
-            # freed); drop the dangling raw pointers we cached too.
             self.column_family_handles.clear()
             for copts in self.cf_options:
                 if copts:
@@ -2655,6 +2682,7 @@ cdef class DB(object):
         cdef db.ColumnFamilyHandle* cf_handle
         cdef ColumnFamilyOptions copts
         cdef Status st
+        cdef _ColumnFamilyHandle real_handle
 
         # Lock the whole drop: the C++ call plus the index()/pop()/del across
         # both parallel lists must be atomic, otherwise a concurrent create/drop
@@ -2669,11 +2697,19 @@ cdef class DB(object):
                 st = self.wrapped_db.DropColumnFamily(cf_handle)
             check_status(st)
 
-            py_handle = weak_handle._ref()
-            index = self.cf_handles.index(py_handle)
+            real_handle = weak_handle._ref()
+            index = self.cf_handles.index(real_handle)
             copts = self.cf_options.pop(index)
             del self.cf_handles[index]
-            del py_handle
+            # Destroy the C++ handle now — under the lock, while the DB is still
+            # open — rather than leaving it to the wrapper's __dealloc__. On a
+            # free-threaded build that dealloc can be deferred to another thread
+            # and run after the DB is closed, where deleting the handle would
+            # dereference freed DB internals (see _destroy_cf_handles_locked).
+            if real_handle is not None and real_handle.handle != NULL:
+                del real_handle.handle
+                real_handle.handle = NULL
+            del real_handle
             if copts:
                 copts.in_use = False
 
@@ -2761,6 +2797,9 @@ cdef class TransactionDB(DB):
             # Free every outstanding iterator/snapshot before closing so rocksdb
             # doesn't assert on a still-referenced column family.
             self._release_children()
+            # Destroy the C++ CF handles under the lock, before Close() (same FT
+            # deferred-__dealloc__ hazard as DB.close()).
+            self._destroy_cf_handles_locked()
             del self.cf_handles[:]
             self.column_family_handles.clear()
             for copts in self.cf_options:
