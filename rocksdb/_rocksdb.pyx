@@ -1347,6 +1347,7 @@ cdef class ColumnFamilyOptions(object):
 cdef class Options(ColumnFamilyOptions):
     cdef options.Options* opts
     cdef PyCache py_row_cache
+    cdef Env py_env
 
     def __cinit__(self):
         # Destroy the existing ColumnFamilyOptions()
@@ -1393,6 +1394,29 @@ cdef class Options(ColumnFamilyOptions):
             return self.opts.paranoid_checks
         def __set__(self, value):
             self.opts.paranoid_checks = value
+
+    property env:
+        def __get__(self):
+            return self.py_env
+        def __set__(self, value):
+            cdef Env c_env
+            if value is None:
+                self.opts.env = Env_Default()
+                self.py_env = None
+                return
+            if not isinstance(value, Env):
+                raise TypeError(
+                    "env must be a rocksdb.Env (e.g. rocksdb.EncryptedEnv) "
+                    "or None, got %s" % type(value))
+            c_env = <Env>value
+            if c_env.wrapped_env == NULL:
+                raise InvalidArgument("env is not initialized")
+            # Keep the Python reference; rocksdb only copies the raw pointer
+            # (at DB open). Reassigning env on an Options object does not
+            # affect a DB that was already opened with it — the DB pins the
+            # env it was opened with (DB.py_env).
+            self.py_env = c_env
+            self.opts.env = c_env.wrapped_env
 
     property max_open_files:
         def __get__(self):

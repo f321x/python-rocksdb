@@ -103,5 +103,28 @@ class TestEncryptedEnv(unittest.TestCase):
         self.assertIs(env1.provider, env2.provider)
 
 
+class TestOptionsEnv(unittest.TestCase):
+    def test_default_is_none(self):
+        self.assertIsNone(rocksdb.Options().env)
+
+    def test_set_get_reset(self):
+        env = rocksdb.EncryptedEnv(make_test_provider())
+        opts = rocksdb.Options()
+        opts.env = env
+        self.assertIs(opts.env, env)
+        opts.env = None
+        self.assertIsNone(opts.env)
+
+    def test_set_via_kwargs(self):
+        env = rocksdb.EncryptedEnv(make_test_provider())
+        opts = rocksdb.Options(create_if_missing=True, env=env)
+        self.assertIs(opts.env, env)
+
+    def test_type_error(self):
+        opts = rocksdb.Options()
+        with self.assertRaises(TypeError):
+            opts.env = "not an env"
+
+
 if __name__ == '__main__':
     unittest.main()
