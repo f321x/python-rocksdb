@@ -3197,15 +3197,35 @@ cdef class ReversedIterator(object):
 
 cdef class BackupEngine(object):
     cdef backup.BackupEngine* engine
+    # Keeps a passed env alive for the engine's lifetime (the C++ engine
+    # holds the raw pointer). __dealloc__ deletes the engine before Cython
+    # drops this reference, so the env always outlives the engine.
+    cdef Env py_env
 
-    def  __cinit__(self, backup_dir):
+    def  __cinit__(self, backup_dir, env=None):
         cdef Status st
         cdef string c_backup_dir
+        cdef CppEnv* c_env
+        cdef Env env_ob
         self.engine = NULL
+        self.py_env = None
+
+        if env is None:
+            c_env = Env_Default()
+        else:
+            if not isinstance(env, Env):
+                raise TypeError(
+                    "env must be a rocksdb.Env (e.g. rocksdb.EncryptedEnv) "
+                    "or None, got %s" % type(env))
+            env_ob = <Env>env
+            if env_ob.wrapped_env == NULL:
+                raise InvalidArgument("env is not initialized")
+            c_env = env_ob.wrapped_env
+            self.py_env = env_ob
 
         c_backup_dir = path_to_string(backup_dir)
         st = backup.BackupEngine_Open(
-            env.Env_Default(),
+            c_env,
             backup.BackupEngineOptions(c_backup_dir),
             cython.address(self.engine))
 

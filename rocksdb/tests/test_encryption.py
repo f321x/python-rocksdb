@@ -260,5 +260,26 @@ class TestEncryptedDB(EncryptedDBHelper):
         self.assertEqual(db.get(b"key"), b"value")
 
 
+class TestEncryptedBackup(EncryptedDBHelper):
+    def test_backup_and_restore(self):
+        env = make_test_env()
+        db = self._open(name="src", env=env)
+        db.put(b"key", b"value")
+        backup_dir = os.path.join(self.loc, "backups")
+        engine = rocksdb.BackupEngine(backup_dir, env=env)
+        engine.create_backup(db, flush_before_backup=True)
+        db.close()
+        restore_loc = os.path.join(self.loc, "restored")
+        engine.restore_latest_backup(restore_loc, restore_loc)
+        del engine
+        gc.collect()
+        restored = self._open(name="restored", env=env)
+        self.assertEqual(restored.get(b"key"), b"value")
+
+    def test_env_type_error(self):
+        with self.assertRaises(TypeError):
+            rocksdb.BackupEngine(os.path.join(self.loc, "b"), env="nope")
+
+
 if __name__ == '__main__':
     unittest.main()
