@@ -544,9 +544,11 @@ Options objects
         (see :doc:`encryption`). ``None`` means RocksDB's default
         environment.
 
-        The env a DB was opened with is pinned by that DB: reassigning this
-        attribute later does not affect an already-open database, and the
-        previous env stays alive for as long as any DB uses it.
+        While the Options object is claimed by a DB (from open until
+        ``close()``), reassigning this attribute raises
+        :py:exc:`rocksdb.errors.InvalidArgument` — RocksDB captured the env
+        at open. The env a DB was opened with is additionally pinned by
+        that DB, so it stays alive for as long as the DB exists.
 
         | *Type:* :py:class:`rocksdb.Env`, ``None``
         | *Default:* ``None``

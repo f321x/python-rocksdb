@@ -127,9 +127,7 @@ class TestOptionsEnv(unittest.TestCase):
 
 
 def make_test_env():
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return rocksdb.EncryptedEnv("CTR://test")
+    return rocksdb.EncryptedEnv(make_test_provider())
 
 
 class EncryptedDBHelper(unittest.TestCase):
@@ -229,20 +227,32 @@ class TestEncryptedDB(EncryptedDBHelper):
         self.assertEqual(db.get(b"key"), b"value")
         db.close()
 
-    def test_env_reassignment_while_open_keeps_env_alive(self):
-        # rocksdb copied the raw env pointer at Open; reassigning
-        # Options.env must not free the env the OPEN db still uses (the DB
-        # pins it). Without the pin this is a use-after-free.
+    def test_env_reassignment_while_in_use_is_refused(self):
+        # rocksdb copies the raw env pointer at Open; swapping Options.env
+        # while the Options are claimed by an open DB would let the DB run
+        # on an env it never pinned (use-after-free once that env's wrapper
+        # is collected), so the setter refuses.
         env = make_test_env()
         opts = rocksdb.Options(create_if_missing=True, env=env)
         db = rocksdb.DB(os.path.join(self.loc, "pin"), opts)
         self._dbs.append(db)
-        opts.env = make_test_env()
-        del env
-        gc.collect()
+        with self.assertRaises(rocksdb.errors.InvalidArgument):
+            opts.env = make_test_env()
+        with self.assertRaises(rocksdb.errors.InvalidArgument):
+            opts.env = None
+        self.assertIs(opts.env, env)    # unchanged
         db.put(b"key", b"value")
         self.assertEqual(db.get(b"key"), b"value")
         db.close()
+        # After close() the claim is released: reassignment is allowed, and
+        # the closed DB's pin (DB.py_env) keeps the old env safely alive.
+        opts.env = make_test_env()
+        del env
+        gc.collect()
+        db2 = rocksdb.DB(os.path.join(self.loc, "pin2"), opts)
+        self._dbs.append(db2)
+        db2.put(b"key", b"value")
+        self.assertEqual(db2.get(b"key"), b"value")
 
     def test_env_shared_by_sequential_dbs(self):
         env = make_test_env()
@@ -279,6 +289,25 @@ class TestEncryptedBackup(EncryptedDBHelper):
     def test_env_type_error(self):
         with self.assertRaises(TypeError):
             rocksdb.BackupEngine(os.path.join(self.loc, "b"), env="nope")
+
+    def test_engine_in_reference_cycle(self):
+        # A subclass instance in a reference cycle is destroyed by cyclic
+        # GC; BackupEngine is no_gc_clear so the engine is deleted before
+        # the env reference is dropped (otherwise the C++ env would be
+        # freed while the engine still uses it).
+        class MyEngine(rocksdb.BackupEngine):
+            pass
+
+        env = make_test_env()
+        db = self._open(name="cyc", env=env)
+        db.put(b"key", b"value")
+        engine = MyEngine(os.path.join(self.loc, "cyc_backups"), env=env)
+        engine.create_backup(db, flush_before_backup=True)
+        engine.self_ref = engine        # the cycle
+        del engine, env
+        gc.collect()
+        db.put(b"key2", b"value2")      # db's own env still fine
+        self.assertEqual(db.get(b"key2"), b"value2")
 
 
 if __name__ == '__main__':

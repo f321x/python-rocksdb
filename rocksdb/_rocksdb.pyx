@@ -26,10 +26,9 @@ from . cimport snapshot
 from . cimport db
 from . cimport iterator
 from . cimport backup
-from . cimport env
-# Direct cimports for use where a local/parameter named `env` would shadow
-# the module alias above (BackupEngine.__cinit__), and because the Python
-# class `Env` below takes the plain name.
+# Direct cimports (no module alias): the Python class `Env` below takes the
+# plain name, and locals/parameters named `env` (BackupEngine.__cinit__)
+# would shadow a module alias.
 from .env cimport Env as CppEnv
 from .env cimport Env_Default
 from . cimport env_encryption
@@ -829,11 +828,13 @@ cdef class EncryptionProvider(object):
         if self.provider.get().IsInstanceOf(b"CTR"):
             warnings.warn(
                 "'%s' resolves to RocksDB's built-in CTR encryption "
-                "provider: its only stock cipher is the test-only ROT13 and "
-                "its per-file IVs come from a non-cryptographic PRNG. It "
-                "does NOT provide real at-rest security; use a production "
-                "provider compiled into librocksdb (e.g. an AES plugin) "
-                "instead." % (spec,), UserWarning, stacklevel=2)
+                "provider, which generates its per-file IVs with a "
+                "non-cryptographic PRNG regardless of the configured cipher "
+                "(and the only cipher stock RocksDB bundles for it is the "
+                "test-only ROT13). Do not rely on it for real at-rest "
+                "security; prefer a dedicated production provider compiled "
+                "into librocksdb (e.g. an AES plugin)."
+                % (spec,), UserWarning, stacklevel=2)
 
     @property
     def id(self):
@@ -906,6 +907,18 @@ cdef class EncryptedEnv(Env):
         if self.wrapped_env != NULL:
             del self.wrapped_env
             self.wrapped_env = NULL
+
+
+cdef Env _validate_env(object value):
+    # Shared by Options.env and BackupEngine(env=...): reject non-Env values
+    # and Env wrappers whose C++ env was never created.
+    if not isinstance(value, Env):
+        raise TypeError(
+            "env must be a rocksdb.Env (e.g. rocksdb.EncryptedEnv) "
+            "or None, got %s" % type(value))
+    if (<Env>value).wrapped_env == NULL:
+        raise InvalidArgument("env is not initialized")
+    return <Env>value
 
 
 cdef class ColumnFamilyOptions(object):
@@ -1399,24 +1412,28 @@ cdef class Options(ColumnFamilyOptions):
         def __get__(self):
             return self.py_env
         def __set__(self, value):
-            cdef Env c_env
-            if value is None:
-                self.opts.env = Env_Default()
-                self.py_env = None
-                return
-            if not isinstance(value, Env):
-                raise TypeError(
-                    "env must be a rocksdb.Env (e.g. rocksdb.EncryptedEnv) "
-                    "or None, got %s" % type(value))
-            c_env = <Env>value
-            if c_env.wrapped_env == NULL:
-                raise InvalidArgument("env is not initialized")
-            # Keep the Python reference; rocksdb only copies the raw pointer
-            # (at DB open). Reassigning env on an Options object does not
-            # affect a DB that was already opened with it — the DB pins the
-            # env it was opened with (DB.py_env).
-            self.py_env = c_env
-            self.opts.env = c_env.wrapped_env
+            cdef Env c_env = None
+            if value is not None:
+                c_env = _validate_env(value)
+            # The critical section pairs with try_acquire()'s: while these
+            # Options are claimed by a DB (open, or mid-DB.__cinit__), the
+            # env must stay immutable — DB.__cinit__ pins py_env and rocksdb
+            # copies the raw env pointer at Open(); an unsynchronized swap
+            # in that window would let the DB run on an env it never pinned
+            # (use-after-free once the new env's wrapper is collected).
+            with cython.critical_section(self):
+                if self.in_use:
+                    raise InvalidArgument(
+                        "Cannot change env on an Options object that is in "
+                        "use by a DB")
+                if c_env is None:
+                    self.opts.env = Env_Default()
+                    self.py_env = None
+                else:
+                    # Keep the Python reference; rocksdb only copies the raw
+                    # pointer (at DB open).
+                    self.py_env = c_env
+                    self.opts.env = c_env.wrapped_env
 
     property max_open_files:
         def __get__(self):
@@ -3195,6 +3212,11 @@ cdef class ReversedIterator(object):
         check_status(self.it.ptr.status())
         return ret
 
+# no_gc_clear: __dealloc__ destroys the C++ engine, which still uses the env
+# that py_env keeps alive — if cyclic GC cleared py_env first (freeing the
+# C++ Env), deleting the engine afterwards would use-after-free. Same
+# ordering requirement as DB/TransactionDB/Snapshot.
+@cython.no_gc_clear
 cdef class BackupEngine(object):
     cdef backup.BackupEngine* engine
     # Keeps a passed env alive for the engine's lifetime (the C++ engine
@@ -3213,13 +3235,7 @@ cdef class BackupEngine(object):
         if env is None:
             c_env = Env_Default()
         else:
-            if not isinstance(env, Env):
-                raise TypeError(
-                    "env must be a rocksdb.Env (e.g. rocksdb.EncryptedEnv) "
-                    "or None, got %s" % type(env))
-            env_ob = <Env>env
-            if env_ob.wrapped_env == NULL:
-                raise InvalidArgument("env is not initialized")
+            env_ob = _validate_env(env)
             c_env = env_ob.wrapped_env
             self.py_env = env_ob
 
