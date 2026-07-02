@@ -6,13 +6,20 @@ BackupEngine
 
 .. py:class:: rocksdb.BackupEngine
 
-    .. py:method:: __init__(backup_dir)
+    .. py:method:: __init__(backup_dir, env=None)
 
         Creates a object to manage backup of a single database.
 
         :param unicode backup_dir: Where to keep the backup files.
                                    Has to be different than db.db_name.
                                    For example db.db_name + '/backups'.
+
+        :param env: The environment used to read the database files and to
+                    write the backups — pass the database's
+                    :py:class:`rocksdb.EncryptedEnv` to back up and restore
+                    an encrypted database (see :doc:`encryption`). ``None``
+                    means the default environment.
+        :type env: :py:class:`rocksdb.Env`, ``None``
 
     .. py:method:: create_backup(db, flush_before_backup=False)
 

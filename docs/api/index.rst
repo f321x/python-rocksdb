@@ -9,3 +9,4 @@ Python driver for RocksDB
     Database <database>
     Interfaces <interfaces>
     Backup <backup>
+    Encryption <encryption>

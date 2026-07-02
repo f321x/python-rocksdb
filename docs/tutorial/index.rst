@@ -309,6 +309,23 @@ The two arguments are the db_dir and wal_dir, which are mostly the same. ::
     backup.restore_latest_backup("test.db", "test.db")
 
 
+Encryption At Rest
+==================
+
+A database can be transparently encrypted on disk by opening it through an
+encrypted environment. ::
+
+    env = rocksdb.EncryptedEnv("CTR://test")   # test provider: UserWarning!
+    opts = rocksdb.Options(create_if_missing=True, env=env)
+    db = rocksdb.DB("test.db", opts)
+
+Reopening the database requires an env with the same provider configuration;
+without it, opening fails with :py:exc:`rocksdb.errors.Corruption`. Stock
+RocksDB only ships a **test-grade** provider — real security needs an AES
+provider compiled into librocksdb. See :doc:`/api/encryption` for the full
+story, including backups and the security caveats.
+
+
 Change Memtable Or SST Implementations
 ======================================
 

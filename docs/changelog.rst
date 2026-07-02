@@ -1,6 +1,21 @@
 Changelog
 *********
 
+Version 2.4 (unreleased)
+------------------------
+
+* **RocksDB's encryption-at-rest framework is exposed.** A database can be
+  opened through an encrypted environment:
+  :py:class:`rocksdb.EncryptionProvider` (loads any provider registered in
+  your librocksdb, e.g. from the encfs/ippcp plugins),
+  :py:class:`rocksdb.EncryptedEnv`, the new :py:attr:`rocksdb.Options.env`
+  attribute and an ``env=`` parameter on :py:class:`rocksdb.BackupEngine`.
+  The binding ships no cryptography of its own; stock RocksDB only bundles a
+  test-grade CTR/ROT13 provider, and constructing it emits a
+  :py:exc:`UserWarning`. See :doc:`api/encryption` for details and caveats.
+  The env a DB is opened with is pinned by the DB, so it can never be freed
+  while still in use.
+
 Version 2.3
 -----------
 

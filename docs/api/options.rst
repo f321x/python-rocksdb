@@ -537,6 +537,20 @@ Options objects
         | *Type:* ``bool``
         | *Default:* ``True``
 
+    .. py:attribute:: env
+
+        The environment the database uses for all file I/O — set this to a
+        :py:class:`rocksdb.EncryptedEnv` to encrypt the database at rest
+        (see :doc:`encryption`). ``None`` means RocksDB's default
+        environment.
+
+        The env a DB was opened with is pinned by that DB: reassigning this
+        attribute later does not affect an already-open database, and the
+        previous env stays alive for as long as any DB uses it.
+
+        | *Type:* :py:class:`rocksdb.Env`, ``None``
+        | *Default:* ``None``
+
     .. py:attribute:: max_open_files
 
         Number of open files that can be used by the DB.  You may need to
