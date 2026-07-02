@@ -1,8 +1,8 @@
 Changelog
 *********
 
-Version 2.4 (unreleased)
-------------------------
+Version 2.4
+-----------
 
 * **RocksDB's encryption-at-rest framework is exposed.** A database can be
   opened through an encrypted environment:
