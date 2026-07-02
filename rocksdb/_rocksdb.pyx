@@ -27,6 +27,12 @@ from . cimport db
 from . cimport iterator
 from . cimport backup
 from . cimport env
+# Direct cimports for use where a local/parameter named `env` would shadow
+# the module alias above (BackupEngine.__cinit__), and because the Python
+# class `Env` below takes the plain name.
+from .env cimport Env as CppEnv
+from .env cimport Env_Default
+from . cimport env_encryption
 from . cimport table_factory
 from . cimport memtablerep
 from . cimport universal_compaction
@@ -61,6 +67,7 @@ from .errors import RocksIOError
 from .errors import MergeInProgress
 from .errors import Incomplete
 
+import warnings
 import weakref
 import threading
 
@@ -778,6 +785,80 @@ cdef class ColumnFamilyHandle:
         # so we use the id of our weakref object here to prevent
         # a situation where we are invalid, but match a valid handle's hash
         return hash((self.id, self.name, id(self._ref)))
+
+
+cdef string config_str_to_string(object spec) except *:
+    # Config/descriptor strings (EncryptionProvider specs etc.) are text;
+    # accept str (utf-8) or bytes.
+    if isinstance(spec, str):
+        spec = (<str>spec).encode('utf-8')
+    if not isinstance(spec, bytes):
+        raise TypeError("expected str or bytes, got %s" % type(spec))
+    return bytes_to_string(spec)
+
+
+cdef class EncryptionProvider(object):
+    """An encryption provider for encrypted Envs, loaded from librocksdb's
+    object registry by its registered name/config string
+    (``rocksdb::EncryptionProvider::CreateFromString``).
+
+    Stock RocksDB registers only the test-grade ``CTR`` provider (whose sole
+    bundled cipher is ROT13); production providers (e.g. AES from the
+    encfs/ippcp plugins) must be compiled into librocksdb and are addressed
+    by their config string, e.g.
+    ``"id=AES;hex_instance_key=...;method=AES256CTR"``.
+    """
+    cdef shared_ptr[env_encryption.EncryptionProvider] provider
+
+    def __cinit__(self, spec):
+        cdef env_encryption.ConfigOptions cfg
+        cdef string c_spec = config_str_to_string(spec)
+        cdef Status st
+        # Strict: an unknown provider name must fail (NotSupported), not
+        # silently return OK with a null provider.
+        cfg.ignore_unsupported_options = False
+        with nogil:
+            st = env_encryption.EncryptionProvider_CreateFromString(
+                cfg, c_spec, cython.address(self.provider))
+        check_status(st)
+        if self.provider.get() == NULL:
+            # e.g. the empty spec: rocksdb reports OK but creates nothing.
+            raise InvalidArgument(
+                "encryption provider spec %r did not resolve to a provider"
+                % (spec,))
+        if self.provider.get().IsInstanceOf(b"CTR"):
+            warnings.warn(
+                "'%s' resolves to RocksDB's built-in CTR encryption "
+                "provider: its only stock cipher is the test-only ROT13 and "
+                "its per-file IVs come from a non-cryptographic PRNG. It "
+                "does NOT provide real at-rest security; use a production "
+                "provider compiled into librocksdb (e.g. an AES plugin) "
+                "instead." % (spec,), UserWarning, stacklevel=2)
+
+    @property
+    def id(self):
+        """The provider's full config id string (``Customizable::GetId``)."""
+        return string_to_bytes(self.provider.get().GetId()).decode('utf-8')
+
+    def add_cipher(self, descriptor, key, for_write=True):
+        """Hand a raw cipher key to the provider
+        (``EncryptionProvider::AddCipher``). Semantics are provider-specific;
+        providers that take their key from the config string typically
+        reject this with :py:exc:`rocksdb.errors.NotSupported`.
+        """
+        cdef string c_desc = config_str_to_string(descriptor)
+        cdef Status st
+        cdef const char* c_key
+        cdef size_t c_len
+        cdef cpp_bool c_for_write = for_write
+        if not isinstance(key, bytes):
+            raise TypeError("key must be bytes, got %s" % type(key))
+        c_key = PyBytes_AsString(key)
+        c_len = PyBytes_Size(key)
+        with nogil:
+            st = self.provider.get().AddCipher(c_desc, c_key, c_len,
+                                               c_for_write)
+        check_status(st)
 
 
 cdef class ColumnFamilyOptions(object):
