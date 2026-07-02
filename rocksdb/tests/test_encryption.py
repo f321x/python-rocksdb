@@ -70,5 +70,38 @@ class TestEncryptionProvider(unittest.TestCase):
             provider.add_cipher("ROT13", "not-bytes")
 
 
+class TestEncryptedEnv(unittest.TestCase):
+    def test_env_is_abstract(self):
+        with self.assertRaises(TypeError):
+            rocksdb.Env()
+
+    def test_from_provider(self):
+        provider = make_test_provider()
+        env = rocksdb.EncryptedEnv(provider)
+        self.assertIs(env.provider, provider)
+        self.assertIsInstance(env, rocksdb.Env)
+
+    def test_from_spec_string(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            env = rocksdb.EncryptedEnv("CTR://test")
+        self.assertEqual(env.provider.id, "CTR")
+
+    def test_provider_type_error(self):
+        with self.assertRaises(TypeError):
+            rocksdb.EncryptedEnv(42)
+
+    def test_provider_readonly(self):
+        env = rocksdb.EncryptedEnv(make_test_provider())
+        with self.assertRaises(AttributeError):
+            env.provider = make_test_provider()
+
+    def test_provider_shared_by_envs(self):
+        provider = make_test_provider()
+        env1 = rocksdb.EncryptedEnv(provider)
+        env2 = rocksdb.EncryptedEnv(provider)
+        self.assertIs(env1.provider, env2.provider)
+
+
 if __name__ == '__main__':
     unittest.main()

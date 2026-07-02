@@ -861,6 +861,53 @@ cdef class EncryptionProvider(object):
         check_status(st)
 
 
+cdef class Env(object):
+    """Abstract base for RocksDB environments usable as ``Options.env``."""
+    cdef CppEnv* wrapped_env
+
+    def __cinit__(self, *args, **kwargs):
+        self.wrapped_env = NULL
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("rocksdb.Env is abstract; use rocksdb.EncryptedEnv")
+
+
+cdef class EncryptedEnv(Env):
+    """An Env that transparently encrypts/decrypts every file RocksDB
+    writes/reads (SSTs, WAL, MANIFEST, ...) by wrapping the default Env with
+    an :py:class:`EncryptionProvider` (``rocksdb::NewEncryptedEnv``).
+
+    Accepts an :py:class:`EncryptionProvider` or a provider spec string.
+    The env is kept alive automatically by every Options/DB/BackupEngine
+    that uses it and is destroyed with its last reference.
+    """
+    cdef readonly EncryptionProvider provider
+
+    def __init__(self, provider):
+        if self.wrapped_env != NULL:
+            raise RuntimeError("EncryptedEnv is already initialized")
+        if isinstance(provider, (str, bytes)):
+            provider = EncryptionProvider(provider)
+        elif not isinstance(provider, EncryptionProvider):
+            raise TypeError(
+                "provider must be a rocksdb.EncryptionProvider or a spec "
+                "str/bytes, got %s" % type(provider))
+        self.provider = provider
+        self.wrapped_env = env_encryption.NewEncryptedEnv(
+            Env_Default(), (<EncryptionProvider>provider).provider)
+
+    def __dealloc__(self):
+        # NewEncryptedEnv returns a caller-owned Env*. Every DB/BackupEngine
+        # using this env holds a reference to this wrapper (see DB.py_env),
+        # so when this runs the DB has already been drained and closed;
+        # deleting the env here cannot race live RocksDB I/O — including
+        # when free-threaded CPython defers this __dealloc__ to another
+        # thread.
+        if self.wrapped_env != NULL:
+            del self.wrapped_env
+            self.wrapped_env = NULL
+
+
 cdef class ColumnFamilyOptions(object):
     cdef options.ColumnFamilyOptions* copts
     cdef PyComparator py_comparator
