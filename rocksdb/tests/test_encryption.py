@@ -126,5 +126,139 @@ class TestOptionsEnv(unittest.TestCase):
             opts.env = "not an env"
 
 
+def make_test_env():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return rocksdb.EncryptedEnv("CTR://test")
+
+
+class EncryptedDBHelper(unittest.TestCase):
+    def setUp(self):
+        self.loc = tempfile.mkdtemp()
+        self._dbs = []
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        for db in self._dbs:
+            db.close()
+        self._dbs = []
+        gc.collect()
+        if os.path.exists(self.loc):
+            shutil.rmtree(self.loc)
+
+    def _open(self, name="db", env=None, cls=rocksdb.DB, **extra):
+        opts = rocksdb.Options(create_if_missing=True)
+        if env is not None:
+            opts.env = env
+        if cls is rocksdb.TransactionDB:
+            extra.setdefault("tdb_opts", rocksdb.TransactionDBOptions())
+        db = cls(os.path.join(self.loc, name), opts, **extra)
+        self._dbs.append(db)
+        return db
+
+
+class TestEncryptedDB(EncryptedDBHelper):
+    MARKER = b"very-secret-plaintext-marker-0123456789"
+
+    def test_roundtrip_and_reopen(self):
+        env = make_test_env()
+        db = self._open(env=env)
+        db.put(b"key", self.MARKER)
+        self.assertEqual(db.get(b"key"), self.MARKER)
+        db.close()
+        db2 = self._open(env=env)
+        self.assertEqual(db2.get(b"key"), self.MARKER)
+
+    def test_iteration(self):
+        env = make_test_env()
+        db = self._open(env=env)
+        for i in range(100):
+            db.put(b"key%03d" % i, b"value%03d" % i)
+        it = db.iteritems()
+        it.seek_to_first()
+        items = list(it)
+        self.assertEqual(len(items), 100)
+        self.assertEqual(items[0], (b"key000", b"value000"))
+
+    def _files_containing(self, root, needle):
+        hits = []
+        for dirpath, _, files in os.walk(root):
+            for fname in files:
+                with open(os.path.join(dirpath, fname), "rb") as f:
+                    if needle in f.read():
+                        hits.append(fname)
+        return hits
+
+    def test_plaintext_not_on_disk(self):
+        env = make_test_env()
+        db = self._open(name="enc", env=env)
+        db.put(b"key", self.MARKER)      # lands at least in the WAL
+        db.close()
+        self.assertEqual(
+            self._files_containing(os.path.join(self.loc, "enc"),
+                                   self.MARKER),
+            [])
+        current = os.path.join(self.loc, "enc", "CURRENT")
+        with open(current, "rb") as f:
+            self.assertFalse(f.read().startswith(b"MANIFEST-"))
+        # control: without the env the marker IS on disk
+        db2 = self._open(name="plain")
+        db2.put(b"key", self.MARKER)
+        db2.close()
+        self.assertNotEqual(
+            self._files_containing(os.path.join(self.loc, "plain"),
+                                   self.MARKER),
+            [])
+
+    def test_open_without_env_fails(self):
+        env = make_test_env()
+        db = self._open(name="enc2", env=env)
+        db.put(b"key", b"value")
+        db.close()
+        with self.assertRaises(rocksdb.errors.Error):
+            self._open(name="enc2")
+
+    def test_env_outlives_dropped_references(self):
+        env = make_test_env()
+        opts = rocksdb.Options(create_if_missing=True, env=env)
+        db = rocksdb.DB(os.path.join(self.loc, "gcdb"), opts)
+        self._dbs.append(db)
+        del env, opts
+        gc.collect()
+        db.put(b"key", b"value")         # env must still be alive
+        self.assertEqual(db.get(b"key"), b"value")
+        db.close()
+
+    def test_env_reassignment_while_open_keeps_env_alive(self):
+        # rocksdb copied the raw env pointer at Open; reassigning
+        # Options.env must not free the env the OPEN db still uses (the DB
+        # pins it). Without the pin this is a use-after-free.
+        env = make_test_env()
+        opts = rocksdb.Options(create_if_missing=True, env=env)
+        db = rocksdb.DB(os.path.join(self.loc, "pin"), opts)
+        self._dbs.append(db)
+        opts.env = make_test_env()
+        del env
+        gc.collect()
+        db.put(b"key", b"value")
+        self.assertEqual(db.get(b"key"), b"value")
+        db.close()
+
+    def test_env_shared_by_sequential_dbs(self):
+        env = make_test_env()
+        for name in (b"one", b"two"):
+            db = self._open(name=name.decode(), env=env)
+            db.put(b"key", name)
+            db.close()
+        db = self._open(name="one", env=env)
+        self.assertEqual(db.get(b"key"), b"one")
+
+    def test_transaction_db(self):
+        env = make_test_env()
+        db = self._open(name="txn", env=env, cls=rocksdb.TransactionDB)
+        db.put(b"key", b"value")
+        self.assertEqual(db.get(b"key"), b"value")
+
+
 if __name__ == '__main__':
     unittest.main()

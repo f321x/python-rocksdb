@@ -2002,6 +2002,13 @@ cdef class WriteBatchIterator(object):
 @cython.no_gc_clear
 cdef class DB(object):
     cdef Options opts
+    # The env these Options carried at open time (or None for the default
+    # env). rocksdb copies the raw Options.env pointer at Open(), so the DB
+    # itself must hold a reference: a later `opts.env = ...` reassignment
+    # must not free an env this DB still uses. Never cleared in close() —
+    # the env has to survive until the phase-2 Close() drain completes; it
+    # is released when this DB object is collected, strictly after that.
+    cdef Env py_env
     cdef db.DB* wrapped_db
     cdef list cf_handles
     cdef list cf_options
@@ -2051,6 +2058,10 @@ cdef class DB(object):
         if not opts.try_acquire():
             raise InvalidArgument(
                 "Options object is already used by another DB")
+        # Pin the env attached to these Options for this DB's whole lifetime
+        # (see the py_env declaration above). Grabbed while the Options claim
+        # is held; on a failed open the DB object dies and drops it again.
+        self.py_env = opts.py_env
         try:
             if not column_families or default_cf_name not in column_families:
                 # Always add the default column family
